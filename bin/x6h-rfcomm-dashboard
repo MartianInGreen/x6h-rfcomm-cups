@@ -1,0 +1,915 @@
+#!/usr/bin/env python3
+"""Small local web UI for X6H RFCOMM image printing."""
+from __future__ import annotations
+
+import argparse
+import base64
+import dataclasses
+import importlib.machinery
+import importlib.util
+import io
+import json
+import sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+
+from PIL import Image, ImageOps
+
+
+def load_core():
+    path = Path(__file__).with_name("x6h-rfcomm-print")
+    loader = importlib.machinery.SourceFileLoader("x6h_rfcomm_print", str(path))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    if spec is None:
+        raise RuntimeError("could not load printer core")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    loader.exec_module(module)
+    return module
+
+
+core = load_core()
+CORE_FIELDS = {field.name for field in dataclasses.fields(core.Settings)}
+REQUIRED_RASTER_FIELDS = {
+    "dither",
+    "dither_strength",
+    "ordered_size",
+    "serpentine",
+    "brightness",
+    "contrast",
+    "gamma",
+    "invert",
+}
+
+
+HTML = r"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>X6H Print Studio</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f3ee;
+      --panel: #ffffff;
+      --ink: #181818;
+      --muted: #66645f;
+      --line: #d9d4ca;
+      --accent: #0f766e;
+      --accent-dark: #115e59;
+      --warn: #a33b20;
+      --shadow: 0 12px 32px rgba(30, 26, 18, .12);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--ink);
+    }
+    main {
+      width: min(1180px, calc(100vw - 32px));
+      margin: 0 auto;
+      padding: 28px 0;
+      display: grid;
+      grid-template-columns: 360px minmax(0, 1fr);
+      gap: 18px;
+    }
+    header {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 18px;
+      min-height: 48px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 24px;
+      font-weight: 720;
+      letter-spacing: 0;
+    }
+    .status {
+      min-height: 28px;
+      color: var(--muted);
+      font-size: 14px;
+      text-align: right;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: var(--shadow);
+    }
+    .controls {
+      padding: 16px;
+      display: grid;
+      gap: 14px;
+      align-content: start;
+    }
+    .drop {
+      position: relative;
+      min-height: 124px;
+      border: 1px dashed #9f988b;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      padding: 18px;
+      background: #fbfaf7;
+      cursor: pointer;
+    }
+    .drop input {
+      position: absolute;
+      inset: 0;
+      opacity: 0;
+      cursor: pointer;
+    }
+    .drop strong {
+      display: block;
+      font-size: 15px;
+      margin-bottom: 4px;
+    }
+    .drop span {
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .group {
+      display: grid;
+      gap: 10px;
+      padding-top: 2px;
+    }
+    .group-title {
+      font-size: 12px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      font-weight: 700;
+    }
+    label {
+      display: grid;
+      gap: 6px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    select, input[type="number"], input[type="range"] {
+      width: 100%;
+    }
+    select, input[type="number"] {
+      height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 0 10px;
+      background: #fff;
+      color: var(--ink);
+      font: inherit;
+    }
+    input[type="range"] {
+      accent-color: var(--accent);
+    }
+    .row {
+      display: grid;
+      grid-template-columns: 1fr 92px;
+      gap: 10px;
+      align-items: end;
+    }
+    .check {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--ink);
+      min-height: 32px;
+    }
+    .check input { width: 18px; height: 18px; accent-color: var(--accent); }
+    .cropper {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #111;
+      touch-action: none;
+      user-select: none;
+      line-height: 0;
+    }
+    .cropper.hidden { display: none; }
+    .cropper img {
+      display: block;
+      width: 100%;
+      height: auto;
+      pointer-events: none;
+    }
+    .crop-box {
+      position: absolute;
+      border: 2px solid #f7f2df;
+      box-shadow: 0 0 0 9999px rgba(0, 0, 0, .46);
+      cursor: move;
+      min-width: 28px;
+      min-height: 28px;
+    }
+    .crop-box::before,
+    .crop-box::after {
+      content: "";
+      position: absolute;
+      inset: 33.333% 0 auto 0;
+      height: 1px;
+      background: rgba(255,255,255,.72);
+      pointer-events: none;
+    }
+    .crop-box::after {
+      inset: 66.666% 0 auto 0;
+    }
+    .crop-grid {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      background:
+        linear-gradient(90deg, transparent 33.333%, rgba(255,255,255,.72) 33.333%, rgba(255,255,255,.72) calc(33.333% + 1px), transparent calc(33.333% + 1px)),
+        linear-gradient(90deg, transparent 66.666%, rgba(255,255,255,.72) 66.666%, rgba(255,255,255,.72) calc(66.666% + 1px), transparent calc(66.666% + 1px));
+    }
+    .crop-handle {
+      position: absolute;
+      width: 14px;
+      height: 14px;
+      border: 2px solid #111;
+      background: #f7f2df;
+      border-radius: 50%;
+    }
+    .crop-handle[data-handle="nw"] { left: -8px; top: -8px; cursor: nwse-resize; }
+    .crop-handle[data-handle="n"] { left: calc(50% - 7px); top: -8px; cursor: ns-resize; }
+    .crop-handle[data-handle="ne"] { right: -8px; top: -8px; cursor: nesw-resize; }
+    .crop-handle[data-handle="e"] { right: -8px; top: calc(50% - 7px); cursor: ew-resize; }
+    .crop-handle[data-handle="se"] { right: -8px; bottom: -8px; cursor: nwse-resize; }
+    .crop-handle[data-handle="s"] { left: calc(50% - 7px); bottom: -8px; cursor: ns-resize; }
+    .crop-handle[data-handle="sw"] { left: -8px; bottom: -8px; cursor: nesw-resize; }
+    .crop-handle[data-handle="w"] { left: -8px; top: calc(50% - 7px); cursor: ew-resize; }
+    .crop-actions {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 10px;
+    }
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      padding-top: 4px;
+    }
+    button {
+      height: 40px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--ink);
+      font: inherit;
+      font-weight: 650;
+      cursor: pointer;
+    }
+    button.primary {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: white;
+    }
+    button.primary:hover { background: var(--accent-dark); }
+    button:disabled {
+      opacity: .5;
+      cursor: not-allowed;
+    }
+    .preview-wrap {
+      padding: 18px;
+      min-height: 680px;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 14px;
+    }
+    .preview-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .preview-stage {
+      min-height: 600px;
+      overflow: auto;
+      border-radius: 8px;
+      background:
+        linear-gradient(90deg, rgba(0,0,0,.035) 1px, transparent 1px),
+        linear-gradient(rgba(0,0,0,.035) 1px, transparent 1px),
+        #ece8df;
+      background-size: 18px 18px;
+      display: grid;
+      place-items: start center;
+      padding: 28px;
+    }
+    .paper {
+      width: min(384px, 100%);
+      min-height: 220px;
+      background: white;
+      border: 1px solid #c9c4ba;
+      box-shadow: 0 8px 22px rgba(0,0,0,.18);
+      display: grid;
+      place-items: center;
+    }
+    .paper img {
+      width: 100%;
+      height: auto;
+      display: block;
+      image-rendering: pixelated;
+    }
+    .empty {
+      color: var(--muted);
+      font-size: 14px;
+      padding: 32px;
+      text-align: center;
+    }
+    .error { color: var(--warn); }
+    @media (max-width: 860px) {
+      main {
+        grid-template-columns: 1fr;
+        width: min(100vw - 20px, 680px);
+        padding: 16px 0;
+      }
+      header {
+        align-items: start;
+        flex-direction: column;
+      }
+      .status { text-align: left; }
+      .preview-wrap { min-height: 480px; }
+      .preview-stage { min-height: 420px; padding: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>X6H Print Studio</h1>
+      <div id="status" class="status"></div>
+    </header>
+
+    <section class="panel controls">
+      <label class="drop">
+        <input id="file" type="file" accept="image/*">
+        <span><strong>Select image</strong><span id="fileName">PNG, JPEG, WebP, BMP</span></span>
+      </label>
+
+      <div class="group">
+        <div class="group-title">Layout</div>
+        <label>Length
+          <select id="lengthMode">
+            <option value="auto">Auto length</option>
+            <option value="fixed">Fixed label</option>
+          </select>
+        </label>
+        <div class="row">
+          <label>Fixed length
+            <select id="lengthMm">
+              <option value="20">20 mm</option>
+              <option value="30">30 mm</option>
+              <option value="40">40 mm</option>
+              <option value="50" selected>50 mm</option>
+              <option value="60">60 mm</option>
+              <option value="75">75 mm</option>
+              <option value="100">100 mm</option>
+              <option value="150">150 mm</option>
+              <option value="200">200 mm</option>
+            </select>
+          </label>
+          <label>Fit
+            <select id="fit">
+              <option value="contain">Contain</option>
+              <option value="cover">Cover</option>
+              <option value="full-width" selected>Full width</option>
+            </select>
+          </label>
+        </div>
+        <label>Orientation
+          <select id="orientation">
+            <option value="auto" selected>Auto</option>
+            <option value="as-is">As is</option>
+            <option value="rotate-cw">Rotate CW</option>
+            <option value="rotate-ccw">Rotate CCW</option>
+          </select>
+        </label>
+        <label class="check">Trim white margins <input id="trim" type="checkbox" checked></label>
+      </div>
+
+      <div class="group">
+        <div class="group-title">Crop</div>
+        <div id="cropper" class="cropper hidden">
+          <img id="cropImage" alt="">
+          <div id="cropBox" class="crop-box">
+            <div class="crop-grid"></div>
+            <span class="crop-handle" data-handle="nw"></span>
+            <span class="crop-handle" data-handle="n"></span>
+            <span class="crop-handle" data-handle="ne"></span>
+            <span class="crop-handle" data-handle="e"></span>
+            <span class="crop-handle" data-handle="se"></span>
+            <span class="crop-handle" data-handle="s"></span>
+            <span class="crop-handle" data-handle="sw"></span>
+            <span class="crop-handle" data-handle="w"></span>
+          </div>
+        </div>
+        <div class="crop-actions">
+          <button id="resetCrop" type="button">Reset crop</button>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-title">Raster</div>
+        <label>Dither
+          <select id="dither">
+            <option value="none">None</option>
+            <option value="threshold">Threshold</option>
+            <option value="floyd-steinberg" selected>Floyd-Steinberg</option>
+            <option value="ordered">Ordered</option>
+            <option value="atkinson">Atkinson</option>
+          </select>
+        </label>
+        <div class="row">
+          <label>Strength <input id="ditherStrength" type="range" min="0" max="1.5" step="0.05" value="1"></label>
+          <input id="ditherStrengthNumber" type="number" min="0" max="1.5" step="0.05" value="1">
+        </div>
+        <label>Ordered size
+          <select id="orderedSize">
+            <option value="4">4 x 4</option>
+            <option value="8" selected>8 x 8</option>
+          </select>
+        </label>
+        <label class="check">Serpentine diffusion <input id="serpentine" type="checkbox" checked></label>
+        <div class="row">
+          <label>Threshold <input id="threshold" type="range" min="80" max="230" value="180"></label>
+          <input id="thresholdNumber" type="number" min="80" max="230" value="180">
+        </div>
+        <div class="row">
+          <label>Brightness <input id="brightness" type="range" min="0.4" max="2.2" step="0.05" value="1"></label>
+          <input id="brightnessNumber" type="number" min="0.4" max="2.2" step="0.05" value="1">
+        </div>
+        <div class="row">
+          <label>Contrast <input id="contrast" type="range" min="0.4" max="2.5" step="0.05" value="1"></label>
+          <input id="contrastNumber" type="number" min="0.4" max="2.5" step="0.05" value="1">
+        </div>
+        <div class="row">
+          <label>Gamma <input id="gamma" type="range" min="0.4" max="2.5" step="0.05" value="1"></label>
+          <input id="gammaNumber" type="number" min="0.4" max="2.5" step="0.05" value="1">
+        </div>
+        <label class="check">Invert <input id="invert" type="checkbox"></label>
+      </div>
+
+      <div class="group">
+        <div class="group-title">Printer</div>
+        <div class="row">
+          <label>Darkness <input id="darkness" type="range" min="6000" max="14000" step="250" value="9500"></label>
+          <input id="darknessNumber" type="number" min="6000" max="14000" step="250" value="9500">
+        </div>
+        <div class="row">
+          <label>Speed <input id="speed" type="range" min="4" max="16" value="10"></label>
+          <input id="speedNumber" type="number" min="4" max="16" value="10">
+        </div>
+        <div class="row">
+          <label>Feed lines <input id="feedLines" type="range" min="0" max="160" value="60"></label>
+          <input id="feedLinesNumber" type="number" min="0" max="160" value="60">
+        </div>
+      </div>
+
+      <div class="actions">
+        <button id="previewBtn">Preview</button>
+        <button id="printBtn" class="primary" disabled>Print</button>
+      </div>
+    </section>
+
+    <section class="panel preview-wrap">
+      <div class="preview-head">
+        <span id="previewMeta">384 px print width</span>
+        <span id="addrMeta"></span>
+      </div>
+      <div class="preview-stage">
+        <div class="paper" id="paper"><div class="empty">Select an image</div></div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const ids = [
+      "file", "fileName", "status", "paper", "previewMeta", "addrMeta",
+      "lengthMode", "lengthMm", "fit", "orientation", "trim", "dither",
+      "cropper", "cropImage", "cropBox", "resetCrop",
+      "ditherStrength", "ditherStrengthNumber", "orderedSize", "serpentine",
+      "brightness", "brightnessNumber", "contrast", "contrastNumber",
+      "gamma", "gammaNumber", "invert",
+      "threshold", "thresholdNumber", "darkness", "darknessNumber",
+      "speed", "speedNumber", "feedLines", "feedLinesNumber",
+      "previewBtn", "printBtn"
+    ];
+    const el = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
+    let imageData = null;
+    let debounce = null;
+    let crop = { x: 0, y: 0, w: 100, h: 100 };
+    let drag = null;
+
+    function bindPair(a, b) {
+      el[a].addEventListener("input", () => { el[b].value = el[a].value; schedulePreview(); });
+      el[b].addEventListener("input", () => { el[a].value = el[b].value; schedulePreview(); });
+    }
+
+    bindPair("threshold", "thresholdNumber");
+    bindPair("ditherStrength", "ditherStrengthNumber");
+    bindPair("brightness", "brightnessNumber");
+    bindPair("contrast", "contrastNumber");
+    bindPair("gamma", "gammaNumber");
+    bindPair("darkness", "darknessNumber");
+    bindPair("speed", "speedNumber");
+    bindPair("feedLines", "feedLinesNumber");
+
+    ["lengthMode", "lengthMm", "fit", "orientation", "trim", "dither", "orderedSize", "serpentine", "invert"].forEach(id => {
+      el[id].addEventListener("input", schedulePreview);
+      el[id].addEventListener("change", schedulePreview);
+    });
+
+    function clamp(value, min, max) {
+      return Math.min(max, Math.max(min, value));
+    }
+
+    function setCrop(next) {
+      const minSize = 5;
+      next.w = clamp(next.w, minSize, 100);
+      next.h = clamp(next.h, minSize, 100);
+      next.x = clamp(next.x, 0, 100 - next.w);
+      next.y = clamp(next.y, 0, 100 - next.h);
+      crop = next;
+      renderCrop();
+      schedulePreview();
+    }
+
+    function renderCrop() {
+      const host = el.cropper.getBoundingClientRect();
+      const image = el.cropImage.getBoundingClientRect();
+      const left = image.left - host.left + image.width * crop.x / 100;
+      const top = image.top - host.top + image.height * crop.y / 100;
+      el.cropBox.style.left = `${left}px`;
+      el.cropBox.style.top = `${top}px`;
+      el.cropBox.style.width = `${image.width * crop.w / 100}px`;
+      el.cropBox.style.height = `${image.height * crop.h / 100}px`;
+    }
+
+    function cropFromDrag(event) {
+      if (!drag) return;
+      const image = el.cropImage.getBoundingClientRect();
+      const dx = (event.clientX - drag.startX) / image.width * 100;
+      const dy = (event.clientY - drag.startY) / image.height * 100;
+      const start = drag.startCrop;
+      const next = { ...start };
+      const minSize = 5;
+
+      if (drag.handle === "move") {
+        next.x = start.x + dx;
+        next.y = start.y + dy;
+      } else {
+        if (drag.handle.includes("w")) {
+          const right = start.x + start.w;
+          next.x = clamp(start.x + dx, 0, right - minSize);
+          next.w = right - next.x;
+        }
+        if (drag.handle.includes("e")) {
+          next.w = clamp(start.w + dx, minSize, 100 - start.x);
+        }
+        if (drag.handle.includes("n")) {
+          const bottom = start.y + start.h;
+          next.y = clamp(start.y + dy, 0, bottom - minSize);
+          next.h = bottom - next.y;
+        }
+        if (drag.handle.includes("s")) {
+          next.h = clamp(start.h + dy, minSize, 100 - start.y);
+        }
+      }
+      setCrop(next);
+    }
+
+    el.cropBox.addEventListener("pointerdown", event => {
+      event.preventDefault();
+      const handle = event.target.dataset.handle || "move";
+      drag = {
+        handle,
+        startX: event.clientX,
+        startY: event.clientY,
+        startCrop: { ...crop }
+      };
+      el.cropBox.setPointerCapture(event.pointerId);
+    });
+    el.cropBox.addEventListener("pointermove", cropFromDrag);
+    el.cropBox.addEventListener("pointerup", event => {
+      drag = null;
+      el.cropBox.releasePointerCapture(event.pointerId);
+    });
+    el.cropBox.addEventListener("pointercancel", () => { drag = null; });
+    el.resetCrop.addEventListener("click", () => setCrop({ x: 0, y: 0, w: 100, h: 100 }));
+    el.cropImage.addEventListener("load", renderCrop);
+    window.addEventListener("resize", renderCrop);
+
+    el.file.addEventListener("change", () => {
+      const file = el.file.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        imageData = reader.result;
+        el.fileName.textContent = file.name;
+        el.cropImage.src = imageData;
+        el.cropper.classList.remove("hidden");
+        setCrop({ x: 0, y: 0, w: 100, h: 100 });
+        el.printBtn.disabled = false;
+        preview();
+      };
+      reader.readAsDataURL(file);
+    });
+
+    el.previewBtn.addEventListener("click", preview);
+    el.printBtn.addEventListener("click", printImage);
+
+    function settings() {
+      return {
+        lengthMode: el.lengthMode.value,
+        lengthMm: Number(el.lengthMm.value),
+        fit: el.fit.value,
+        orientation: el.orientation.value,
+        trim: el.trim.checked,
+        cropLeft: crop.x,
+        cropRight: 100 - crop.x - crop.w,
+        cropTop: crop.y,
+        cropBottom: 100 - crop.y - crop.h,
+        dither: el.dither.value,
+        ditherStrength: Number(el.ditherStrength.value),
+        orderedSize: Number(el.orderedSize.value),
+        serpentine: el.serpentine.checked,
+        threshold: Number(el.threshold.value),
+        brightness: Number(el.brightness.value),
+        contrast: Number(el.contrast.value),
+        gamma: Number(el.gamma.value),
+        invert: el.invert.checked,
+        darkness: Number(el.darkness.value),
+        speed: Number(el.speed.value),
+        feedLines: Number(el.feedLines.value)
+      };
+    }
+
+    function schedulePreview() {
+      if (!imageData) return;
+      clearTimeout(debounce);
+      debounce = setTimeout(preview, 180);
+    }
+
+    async function request(path) {
+      const response = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: imageData, settings: settings() })
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || "Request failed");
+      return body;
+    }
+
+    async function preview() {
+      if (!imageData) return;
+      el.status.textContent = "Rendering";
+      el.status.className = "status";
+      try {
+        const body = await request("/api/preview");
+        el.paper.innerHTML = `<img alt="Print preview" src="${body.preview}">`;
+        el.previewMeta.textContent = `${body.width} x ${body.height} px / ${body.lengthMm} mm`;
+        el.addrMeta.textContent = body.raster || body.addr;
+        el.status.textContent = body.warning || "Ready";
+        el.status.className = body.warning ? "status error" : "status";
+      } catch (error) {
+        el.status.textContent = error.message;
+        el.status.className = "status error";
+      }
+    }
+
+    async function printImage() {
+      if (!imageData) return;
+      el.printBtn.disabled = true;
+      el.status.textContent = "Printing";
+      el.status.className = "status";
+      try {
+        const body = await request("/api/print");
+        el.status.textContent = body.message;
+      } catch (error) {
+        el.status.textContent = error.message;
+        el.status.className = "status error";
+      } finally {
+        el.printBtn.disabled = false;
+      }
+    }
+  </script>
+</body>
+</html>
+"""
+
+
+def image_from_data_url(value: str) -> Image.Image:
+    if "," in value:
+        value = value.split(",", 1)[1]
+    data = base64.b64decode(value)
+    return Image.open(io.BytesIO(data))
+
+
+def json_response(handler: BaseHTTPRequestHandler, status: int, payload: dict[str, Any]) -> None:
+    body = json.dumps(payload).encode()
+    handler.send_response(status)
+    handler.send_header("Content-Type", "application/json")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def png_data_url(image: Image.Image) -> str:
+    buf = io.BytesIO()
+    image.convert("L").save(buf, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def mm_to_px(mm: float, dpi: int) -> int:
+    return max(1, round(mm / 25.4 * dpi))
+
+
+def settings_from_payload(server: "DashboardServer", payload: dict[str, Any]) -> Any:
+    opts = payload.get("settings") or {}
+    kwargs = dict(
+        addr=server.printer_addr,
+        channel=server.channel,
+        darkness=int(opts.get("darkness", 9500)),
+        speed=int(opts.get("speed", 10)),
+        quality=3,
+        threshold=int(opts.get("threshold", 180)),
+        feed_lines=int(opts.get("feedLines", 60)),
+        scale="fit-width",
+        dither=str(opts.get("dither", "floyd-steinberg")),
+        dither_strength=float(opts.get("ditherStrength", 1.0)),
+        ordered_size=4 if int(opts.get("orderedSize", 8)) <= 4 else 8,
+        serpentine=bool(opts.get("serpentine", True)),
+        brightness=float(opts.get("brightness", 1.0)),
+        contrast=float(opts.get("contrast", 1.0)),
+        gamma=float(opts.get("gamma", 1.0)),
+        invert=bool(opts.get("invert", False)),
+        orientation=str(opts.get("orientation", "auto")),
+        trim=bool(opts.get("trim", True)),
+    )
+    return core.Settings(**{key: value for key, value in kwargs.items() if key in CORE_FIELDS})
+
+
+def core_warning() -> str | None:
+    missing = sorted(REQUIRED_RASTER_FIELDS - CORE_FIELDS)
+    if missing:
+        return "Older printer core loaded; rerun the installer so raster controls apply."
+    return None
+
+
+def raster_summary(settings: Any) -> str:
+    dither = getattr(settings, "dither", "none")
+    threshold = getattr(settings, "threshold", 180)
+    strength = getattr(settings, "dither_strength", 1.0)
+    return f"{dither}, threshold {threshold}, strength {strength}"
+
+
+def crop_image(image: Image.Image, opts: dict[str, Any]) -> Image.Image:
+    left_pct = max(0.0, min(45.0, float(opts.get("cropLeft", 0)))) / 100
+    right_pct = max(0.0, min(45.0, float(opts.get("cropRight", 0)))) / 100
+    top_pct = max(0.0, min(45.0, float(opts.get("cropTop", 0)))) / 100
+    bottom_pct = max(0.0, min(45.0, float(opts.get("cropBottom", 0)))) / 100
+    left = round(image.width * left_pct)
+    right = image.width - round(image.width * right_pct)
+    top = round(image.height * top_pct)
+    bottom = image.height - round(image.height * bottom_pct)
+    if right <= left or bottom <= top:
+        return image
+    return image.crop((left, top, right, bottom))
+
+
+def initial_grayscale(image: Image.Image, settings: Any, opts: dict[str, Any]) -> Image.Image:
+    image = ImageOps.exif_transpose(image).convert("L")
+    image = crop_image(image, opts)
+    if settings.trim:
+        image = core.trim_whitespace(image)
+    return core.orient_image(image, settings)
+
+
+def render_dashboard_image(image: Image.Image, settings: Any, opts: dict[str, Any]) -> Image.Image:
+    length_mode = str(opts.get("lengthMode", "auto"))
+    fit = str(opts.get("fit", "full-width"))
+
+    if length_mode != "fixed":
+        image = crop_image(ImageOps.exif_transpose(image), opts)
+        return core.prepare_image(image, settings)
+
+    image = initial_grayscale(image, settings, opts)
+    target_h = mm_to_px(float(opts.get("lengthMm", 50)), settings.dpi)
+
+    if fit == "cover":
+        ratio = max(core.WIDTH_PX / image.width, target_h / image.height)
+    elif fit == "contain":
+        ratio = min(core.WIDTH_PX / image.width, target_h / image.height)
+    else:
+        ratio = core.WIDTH_PX / image.width
+
+    resized = image.resize(
+        (max(1, round(image.width * ratio)), max(1, round(image.height * ratio))),
+        Image.Resampling.LANCZOS,
+    )
+    canvas = Image.new("L", (core.WIDTH_PX, target_h), 255)
+    x = (core.WIDTH_PX - resized.width) // 2
+    y = (target_h - resized.height) // 2
+    canvas.paste(resized, (x, y))
+    if hasattr(core, "apply_tone"):
+        canvas = core.apply_tone(canvas, settings)
+    if hasattr(core, "binarize_image"):
+        return core.binarize_image(canvas, settings)
+    return core.prepare_image(canvas, settings)
+
+
+class DashboardServer(ThreadingHTTPServer):
+    def __init__(self, server_address, handler_class, printer_addr: str, channel: int):
+        super().__init__(server_address, handler_class)
+        self.printer_addr = printer_addr
+        self.channel = channel
+
+
+class Handler(BaseHTTPRequestHandler):
+    server: DashboardServer
+
+    def log_message(self, fmt: str, *args) -> None:
+        print(fmt % args, file=sys.stderr)
+
+    def do_GET(self) -> None:
+        if self.path != "/":
+            self.send_error(404)
+            return
+        body = HTML.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self) -> None:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if length > 25 * 1024 * 1024:
+                raise ValueError("image is too large")
+            payload = json.loads(self.rfile.read(length))
+            opts = payload.get("settings") or {}
+            settings = settings_from_payload(self.server, payload)
+            image = image_from_data_url(payload["image"])
+            prepared = render_dashboard_image(image, settings, opts)
+
+            if self.path == "/api/preview":
+                json_response(self, 200, {
+                    "preview": png_data_url(prepared),
+                    "width": prepared.width,
+                    "height": prepared.height,
+                    "lengthMm": round(prepared.height / settings.dpi * 25.4, 1),
+                    "addr": settings.addr,
+                    "raster": raster_summary(settings),
+                    "warning": core_warning(),
+                })
+                return
+
+            if self.path == "/api/print":
+                core.print_prepared_images([prepared], settings)
+                json_response(self, 200, {
+                    "message": "Printed",
+                    "width": prepared.width,
+                    "height": prepared.height,
+                })
+                return
+
+            self.send_error(404)
+        except Exception as exc:
+            json_response(self, 400, {"error": str(exc)})
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Run the X6H RFCOMM print dashboard.")
+    parser.add_argument("--addr", default=None, help="Bluetooth MAC address")
+    parser.add_argument("--channel", type=int, default=1)
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8765)
+    args = parser.parse_args()
+
+    if not args.addr:
+        parser.error("--addr is required")
+
+    server = DashboardServer((args.host, args.port), Handler, args.addr.replace("-", ":").upper(), args.channel)
+    print(f"Serving http://{args.host}:{args.port}")
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print()
+    finally:
+        server.server_close()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -19,10 +19,12 @@ org.bluez.Error.BREDR.ProfileUnavailable
 ## What It Provides
 
 - `bin/x6h-rfcomm-print`: direct CLI printer script.
+- `bin/x6h-rfcomm-dashboard`: local image-printing web UI.
 - CUPS backend mode: install the same executable as
   `/usr/lib/cups/backend/x6h-rfcomm`.
 - `cups/x6h-rfcomm.ppd`: CUPS model with 58 mm receipt paper presets.
 - `scripts/install-cups.sh`: installs the backend and creates a CUPS queue.
+- `scripts/install-dashboard-service.sh`: optional user service for the web UI.
 
 The printer uses 384-pixel-wide, 1-bit thermal bitmap lines sent over Bluetooth
 RFCOMM/SPP. No `/dev/rfcomm0` binding is required.
@@ -73,12 +75,74 @@ bin/x6h-rfcomm-print \
   --speed 10 \
   --quality 3 \
   --threshold 180 \
+  --dither none \
+  --dither-strength 1.0 \
+  --brightness 1.0 \
+  --contrast 1.0 \
+  --gamma 1.0 \
   --font-size 32 \
   --feed-lines 80 \
+  --orientation auto \
   "Hello"
 ```
 
+## Image Dashboard
+
+Run the dashboard:
+
+```bash
+bin/x6h-rfcomm-dashboard --addr B7:2C:83:E6:F8:3E
+```
+
+Open:
+
+```text
+http://127.0.0.1:8765
+```
+
+The dashboard prints directly over RFCOMM and does not use CUPS page sizes. It
+has fixed-label and auto-length modes, live bitmap preview, edge cropping,
+margin trimming, orientation control, tone controls, darkness/speed/feed
+controls, and raster methods:
+
+- None
+- Threshold
+- Floyd-Steinberg
+- Ordered dither
+- Atkinson
+
+Dashboard-only image controls include crop-left/right/top/bottom, brightness,
+contrast, gamma, invert, error-diffusion strength, ordered dither matrix size,
+and serpentine diffusion.
+
+Install it as a user service:
+
+```bash
+scripts/install-dashboard-service.sh B7:2C:83:E6:F8:3E 8765
+```
+
+The service installer always restarts `x6h-rfcomm-dashboard.service` so an
+updated dashboard executable is used immediately.
+
 ## Install As A CUPS Printer
+
+One-command install/update for the known `X6h-2CB7` printer:
+
+```bash
+./install.sh
+```
+
+That defaults to:
+
+- Bluetooth address: `B7:2C:83:E6:F8:3E`
+- CUPS printer name: `X6h-2CB7`
+- Dashboard: `http://127.0.0.1:8765`
+
+Override values if needed:
+
+```bash
+./install.sh B7:2C:83:E6:F8:3E X6h-2CB7 8765
+```
 
 From the repository root:
 
@@ -90,10 +154,11 @@ scripts/install-cups.sh B7:2C:83:E6:F8:3E X6h-2CB7
 The installer:
 
 1. Copies the CLI to `/usr/local/bin/x6h-rfcomm-print`.
-2. Copies the same executable to the CUPS backend directory as `x6h-rfcomm`.
-3. Installs Pillow through the system package manager if it is missing.
-4. Restarts CUPS.
-5. Creates a PPD-backed queue named `X6h-2CB7`.
+2. Copies the dashboard to `/usr/local/bin/x6h-rfcomm-dashboard`.
+3. Copies the same executable to the CUPS backend directory as `x6h-rfcomm`.
+4. Installs Pillow through the system package manager if it is missing.
+5. Restarts CUPS.
+6. Creates a PPD-backed queue named `X6h-2CB7`.
 
 Manual equivalent:
 
@@ -155,13 +220,17 @@ Supported option names:
 - `x6h-speed`: default `10`
 - `x6h-quality`: default `3`
 - `x6h-threshold`: default `180`
+- `x6h-dither`: `None`, `Threshold`, `Floyd-Steinberg`, `Ordered`, or
+  `Atkinson`
 - `x6h-font-size`: default `32`
 - `x6h-feed-lines`: default `80`
 - `x6h-align`: `left`, `center`, or `right`
 - `x6h-scale`: `fit-width` or `native`
 - `x6h-channel`: default `1`
+- `x6h-image-orientation`: `Auto`, `AsIs`, `RotateCW`, or `RotateCCW`
+- `x6h-trim`: `True` or `False`
 - PPD dialogs may show these as `Darkness`, `Speed`, `Threshold`, `FontSize`,
-  and `FeedLines`.
+  `FeedLines`, `ImageOrientation`, and `Trim`.
 
 You can also put stable settings in the device URI:
 
@@ -176,6 +245,10 @@ sudo lpadmin -p X6h-2CB7 -v 'x6h-rfcomm://B7-2C-83-E6-F8-3E?channel=1&darkness=1
 - The CUPS queue uses a small PPD so desktop print dialogs show 58 mm receipt
   paper sizes. The backend accepts text, common image formats, PDF, and
   PostScript directly.
+- Images are trimmed and auto-oriented by default because desktop print dialogs
+  often add page margins or rotate content on very short receipt sizes. Disable
+  that with `-o Trim=False -o ImageOrientation=AsIs`, or force it with
+  `-o ImageOrientation=RotateCW`.
 - PDF support requires `pdftoppm`; PostScript support requires `gs`.
 - If another phone app is connected to the printer, disconnect it before
   printing from Linux.

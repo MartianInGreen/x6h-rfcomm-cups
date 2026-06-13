@@ -1,6 +1,6 @@
 *PPD-Adobe: "4.3"
 *FormatVersion: "4.3"
-*FileVersion: "0.3"
+*FileVersion: "0.6"
 *LanguageVersion: English
 *LanguageEncoding: ISOLatin1
 *PCFileName: "X6HRFCOM.PPD"
@@ -118,6 +118,16 @@
 *Threshold T220/Darker image: ""
 *CloseUI: *Threshold
 
+*OpenUI *Dither/Raster Method: PickOne
+*OrderDependency: 110 AnySetup *Dither
+*DefaultDither: None
+*Dither None/None: ""
+*Dither Threshold/Threshold: ""
+*Dither Floyd-Steinberg/Floyd-Steinberg: ""
+*Dither Ordered/Ordered dither: ""
+*Dither Atkinson/Atkinson: ""
+*CloseUI: *Dither
+
 *OpenUI *FontSize/Text Font Size: PickOne
 *OrderDependency: 110 AnySetup *FontSize
 *DefaultFontSize: F32
@@ -133,6 +143,22 @@
 *FeedLines L80/Normal: ""
 *FeedLines L120/Long: ""
 *CloseUI: *FeedLines
+
+*OpenUI *ImageOrientation/Image Orientation Fix: PickOne
+*OrderDependency: 110 AnySetup *ImageOrientation
+*DefaultImageOrientation: Auto
+*ImageOrientation Auto/Auto rotate wide content: ""
+*ImageOrientation AsIs/Do not rotate: ""
+*ImageOrientation RotateCW/Rotate clockwise: ""
+*ImageOrientation RotateCCW/Rotate counterclockwise: ""
+*CloseUI: *ImageOrientation
+
+*OpenUI *Trim/Trim White Margins: Boolean
+*OrderDependency: 110 AnySetup *Trim
+*DefaultTrim: True
+*Trim True/Enabled: ""
+*Trim False/Disabled: ""
+*CloseUI: *Trim
 
 *CloseGroup: General
 *DefaultResolution: 203dpi

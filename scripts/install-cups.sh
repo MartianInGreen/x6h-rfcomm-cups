@@ -20,6 +20,7 @@ fi
 backend_dir="$cups_serverbin/backend"
 backend_path="$backend_dir/x6h-rfcomm"
 cli_path="/usr/local/bin/x6h-rfcomm-print"
+dashboard_path="/usr/local/bin/x6h-rfcomm-dashboard"
 ppd_path="$repo_root/cups/x6h-rfcomm.ppd"
 
 if [[ ! -f "$ppd_path" ]]; then
@@ -49,6 +50,9 @@ fi
 
 echo "Installing CLI: $cli_path"
 sudo install -m 0755 "$repo_root/bin/x6h-rfcomm-print" "$cli_path"
+
+echo "Installing dashboard: $dashboard_path"
+sudo install -m 0755 "$repo_root/bin/x6h-rfcomm-dashboard" "$dashboard_path"
 
 echo "Installing CUPS backend: $backend_path"
 sudo install -d -m 0755 "$backend_dir"
@@ -80,6 +84,9 @@ Installed.
 
 Test CLI:
   x6h-rfcomm-print --addr ${addr//-/:} "Hello from CLI"
+
+Test dashboard:
+  x6h-rfcomm-dashboard --addr ${addr//-/:}
 
 Test CUPS:
   lp -d "$printer_name" -o x6h-darkness=9500 -o x6h-font-size=32 README.md
