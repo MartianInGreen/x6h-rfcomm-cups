@@ -527,6 +527,22 @@ HTML = r"""<!doctype html>
         <label class="check">Invert <input id="imageInvert" type="checkbox"></label>
       </div>
 
+      <div class="group">
+        <div class="group-title">Printer</div>
+        <div class="row">
+          <label>Darkness <input id="imageDarkness" type="range" min="6000" max="14000" step="250" value="9500"></label>
+          <input id="imageDarknessNumber" type="number" min="6000" max="14000" step="250" value="9500">
+        </div>
+        <div class="row">
+          <label>Speed <input id="imageSpeed" type="range" min="4" max="16" value="10"></label>
+          <input id="imageSpeedNumber" type="number" min="4" max="16" value="10">
+        </div>
+        <div class="row">
+          <label>Feed lines <input id="imageFeedLines" type="range" min="0" max="160" value="60"></label>
+          <input id="imageFeedLinesNumber" type="number" min="0" max="160" value="60">
+        </div>
+      </div>
+
       <div class="actions">
         <button id="imagePreviewBtn">Preview</button>
         <button id="imagePrintBtn" class="primary" disabled>Print</button>
@@ -597,6 +613,22 @@ HTML = r"""<!doctype html>
         <div class="row">
           <label>Contrast <input id="pdfContrast" type="range" min="0.4" max="2.5" step="0.05" value="1"></label>
           <input id="pdfContrastNumber" type="number" min="0.4" max="2.5" step="0.05" value="1">
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-title">Printer</div>
+        <div class="row">
+          <label>Darkness <input id="pdfDarkness" type="range" min="6000" max="14000" step="250" value="9500"></label>
+          <input id="pdfDarknessNumber" type="number" min="6000" max="14000" step="250" value="9500">
+        </div>
+        <div class="row">
+          <label>Speed <input id="pdfSpeed" type="range" min="4" max="16" value="10"></label>
+          <input id="pdfSpeedNumber" type="number" min="4" max="16" value="10">
+        </div>
+        <div class="row">
+          <label>Feed lines <input id="pdfFeedLines" type="range" min="0" max="160" value="60"></label>
+          <input id="pdfFeedLinesNumber" type="number" min="0" max="160" value="60">
         </div>
       </div>
 
@@ -762,6 +794,22 @@ HTML = r"""<!doctype html>
         <label class="check">Invert <input id="textInvert" type="checkbox"></label>
       </div>
 
+      <div class="group">
+        <div class="group-title">Printer</div>
+        <div class="row">
+          <label>Darkness <input id="textDarkness" type="range" min="6000" max="14000" step="250" value="9500"></label>
+          <input id="textDarknessNumber" type="number" min="6000" max="14000" step="250" value="9500">
+        </div>
+        <div class="row">
+          <label>Speed <input id="textSpeed" type="range" min="4" max="16" value="10"></label>
+          <input id="textSpeedNumber" type="number" min="4" max="16" value="10">
+        </div>
+        <div class="row">
+          <label>Feed lines <input id="textFeedLines" type="range" min="0" max="160" value="60"></label>
+          <input id="textFeedLinesNumber" type="number" min="0" max="160" value="60">
+        </div>
+      </div>
+
       <div class="actions">
         <button id="textPreviewBtn">Preview</button>
         <button id="textPrintBtn" class="primary">Print</button>
@@ -836,6 +884,15 @@ HTML = r"""<!doctype html>
     bindPair("textMarginY", "textMarginYNumber", scheduleTextPreview);
     bindPair("textLineGap", "textLineGapNumber", scheduleTextPreview);
     bindPair("textParagraphGap", "textParagraphGapNumber", scheduleTextPreview);
+    bindPair("imageDarkness", "imageDarknessNumber");
+    bindPair("imageSpeed", "imageSpeedNumber");
+    bindPair("imageFeedLines", "imageFeedLinesNumber");
+    bindPair("pdfDarkness", "pdfDarknessNumber");
+    bindPair("pdfSpeed", "pdfSpeedNumber");
+    bindPair("pdfFeedLines", "pdfFeedLinesNumber");
+    bindPair("textDarkness", "textDarknessNumber");
+    bindPair("textSpeed", "textSpeedNumber");
+    bindPair("textFeedLines", "textFeedLinesNumber");
 
     [
       "imageLengthMode", "imageLengthMm", "imageFit", "imageOrientation", "imageTrim",
@@ -987,9 +1044,9 @@ HTML = r"""<!doctype html>
         contrast: Number($("imageContrast").value),
         gamma: Number($("imageGamma").value),
         invert: $("imageInvert").checked,
-        darkness: 9500,
-        speed: 10,
-        feedLines: 60,
+        darkness: Number($("imageDarkness").value),
+        speed: Number($("imageSpeed").value),
+        feedLines: Number($("imageFeedLines").value),
       };
     }
 
@@ -1070,6 +1127,9 @@ HTML = r"""<!doctype html>
         threshold: Number($("pdfThreshold").value),
         brightness: Number($("pdfBrightness").value),
         contrast: Number($("pdfContrast").value),
+        darkness: Number($("pdfDarkness").value),
+        speed: Number($("pdfSpeed").value),
+        feedLines: Number($("pdfFeedLines").value),
       };
     }
 
@@ -1169,6 +1229,9 @@ print('hello')
         dither: $("textDither").value,
         threshold: Number($("textThreshold").value),
         invert: $("textInvert").checked,
+        darkness: Number($("textDarkness").value),
+        speed: Number($("textSpeed").value),
+        feedLines: Number($("textFeedLines").value),
       };
     }
 
@@ -1287,7 +1350,7 @@ def settings_from_payload(server: "DashboardServer", payload: dict[str, Any]) ->
         quality=3,
         threshold=int(opts.get("threshold", 180)),
         feed_lines=int(opts.get("feedLines", 60)),
-        scale=str(opts.get("fit", "fit-width")) if "fit" in opts else "fit-width",
+        scale="fit-width",
         dither=str(opts.get("dither", "floyd-steinberg")),
         dither_strength=float(opts.get("ditherStrength", 1.0)),
         ordered_size=4 if int(opts.get("orderedSize", 8)) <= 4 else 8,
