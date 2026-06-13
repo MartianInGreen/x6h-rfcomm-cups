@@ -38,7 +38,7 @@ RFCOMM/SPP. No `/dev/rfcomm0` binding is required.
 On Arch Linux:
 
 ```bash
-sudo pacman -S cups bluez bluez-utils python-pillow poppler ghostscript
+sudo pacman -S --needed cups bluez bluez-utils python-pillow poppler ghostscript
 sudo systemctl enable --now bluetooth cups
 ```
 
@@ -90,8 +90,9 @@ The installer:
 
 1. Copies the CLI to `/usr/local/bin/x6h-rfcomm-print`.
 2. Copies the same executable to the CUPS backend directory as `x6h-rfcomm`.
-3. Restarts CUPS.
-4. Creates a raw queue named `X6h-2CB7`.
+3. Installs Pillow through the system package manager if it is missing.
+4. Restarts CUPS.
+5. Creates a raw queue named `X6h-2CB7`.
 
 Manual equivalent:
 

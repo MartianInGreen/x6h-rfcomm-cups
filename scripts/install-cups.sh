@@ -21,8 +21,25 @@ backend_dir="$cups_serverbin/backend"
 backend_path="$backend_dir/x6h-rfcomm"
 cli_path="/usr/local/bin/x6h-rfcomm-print"
 
-echo "Installing Python dependency: Pillow"
-python3 -m pip install --user Pillow
+if ! python3 -s -c 'import PIL' >/dev/null 2>&1; then
+  echo "Installing Python dependency: Pillow"
+  if command -v pacman >/dev/null 2>&1; then
+    sudo pacman -S --needed python-pillow
+  elif command -v apt-get >/dev/null 2>&1; then
+    sudo apt-get update
+    sudo apt-get install -y python3-pil
+  elif command -v dnf >/dev/null 2>&1; then
+    sudo dnf install -y python3-pillow
+  elif command -v zypper >/dev/null 2>&1; then
+    sudo zypper install -y python3-Pillow
+  else
+    echo "Could not find a supported package manager." >&2
+    echo "Install Pillow for the system Python, then rerun this script." >&2
+    exit 1
+  fi
+else
+  echo "Python dependency already installed: Pillow"
+fi
 
 echo "Installing CLI: $cli_path"
 sudo install -m 0755 "$repo_root/bin/x6h-rfcomm-print" "$cli_path"
