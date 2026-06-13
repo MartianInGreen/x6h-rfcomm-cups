@@ -33,6 +33,11 @@ try:
 except ImportError:
     lzo = None
 
+try:
+    import markdown as _markdown
+except ImportError:
+    _markdown = None
+
 WIDTH_BYTES = 48
 WIDTH_PX = WIDTH_BYTES * 8
 
@@ -80,6 +85,29 @@ class Settings:
     trim: bool = True
     dpi: int = 203
     line_delay: float = 0.008
+
+
+@dataclass(frozen=True)
+class MarkdownOptions:
+    font_size: int = 32
+    align: str = "left"
+    margin_x: int = 8
+    margin_y: int = 8
+    line_gap: int = 2
+    paragraph_gap: int = 6
+    list_indent: int = 12
+    code_padding_x: int = 8
+    code_padding_y: int = 6
+    heading_h1_delta: int = 14
+    heading_h2_delta: int = 10
+    heading_h3_delta: int = 6
+    heading_h4_delta: int = 4
+    heading_h5_delta: int = 2
+    heading_h6_delta: int = 0
+    content_width: int = 0
+    wrap: bool = True
+    hr_padding: int = 8
+    compact: bool = False
 
 
 def cups_log(level: str, message: str) -> None:
@@ -307,6 +335,653 @@ def image_from_bytes(data: bytes, settings: Settings) -> list[Image.Image]:
     except UnidentifiedImageError:
         text = data.decode("utf-8", errors="replace")
         return [render_text(text, settings)]
+
+
+_MD_INLINE_RE = re.compile(
+    r"(\*\*[^*]+\*\*|__[^_]+__|`[^`]+`|\[[^\]]+\]\([^)]+\)|\*[^*]+\*|_[^_]+_)"
+)
+_MD_HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
+_MD_FENCE_RE = re.compile(r"^```")
+_MD_HR_RE = re.compile(r"^\s*([-*_])\s*\1\s*\1[\s\1]*$")
+_MD_BQ_RE = re.compile(r"^>\s?(.*)$")
+_MD_ULI_RE = re.compile(r"^(\s*)[-*+]\s+(.*)$")
+_MD_OLI_RE = re.compile(r"^(\s*)(\d+)\.\s+(.*)$")
+_MD_CODE_RE = re.compile(r"`([^`]+)`")
+_MD_BOLD_RE = re.compile(r"(\*\*[^*]+\*\*|__[^_]+__)")
+_MD_ITALIC_RE = re.compile(r"(\*[^*]+\*|_[^_]+_)")
+
+
+def _wrap_to_width(text: str, draw: ImageDraw.ImageDraw, font: ImageFont.ImageFont, max_width: int) -> list[str]:
+    out: list[str] = []
+    for raw in text.splitlines() or [""]:
+        if not raw:
+            out.append("")
+            continue
+        words = raw.split(" ")
+        if not words:
+            out.append("")
+            continue
+        current = words[0]
+        for word in words[1:]:
+            candidate = f"{current} {word}" if current else word
+            if draw.textlength(candidate, font=font) <= max_width:
+                current = candidate
+            else:
+                if current:
+                    out.append(current)
+                current = word
+        if current:
+            out.append(current)
+    return out
+
+
+def _inline_segments(text: str) -> list[tuple[str, dict[str, bool]]]:
+    segments: list[tuple[str, dict[str, bool]]] = []
+    pos = 0
+    for match in _MD_INLINE_RE.finditer(text):
+        if match.start() > pos:
+            segments.append((text[pos:match.start()], {}))
+        token = match.group(0)
+        if token.startswith("**") or token.startswith("__"):
+            segments.append((token[2:-2], {"bold": True}))
+        elif token.startswith("`"):
+            segments.append((token[1:-1], {"code": True}))
+        elif token.startswith("["):
+            label_match = re.match(r"\[([^\]]+)\]\(([^)]+)\)", token)
+            if label_match:
+                segments.append((label_match.group(1), {"link": True}))
+            else:
+                segments.append((token, {}))
+        elif token.startswith("*") or token.startswith("_"):
+            segments.append((token[1:-1], {"italic": True}))
+        pos = match.end()
+    if pos < len(text):
+        segments.append((text[pos:], {}))
+    if not segments:
+        segments = [("", {})]
+    return segments
+
+
+def _font_for(
+    base_font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    size_delta: int,
+    bold: bool = False,
+    italic: bool = False,
+    monospace: bool = False,
+) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    if not isinstance(base_font, ImageFont.FreeTypeFont):
+        return base_font
+    size = max(8, base_font.size + size_delta)
+    paths: list[tuple[str, ...]] = []
+    if monospace:
+        paths = [
+            ("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",),
+            ("/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",),
+            ("/usr/share/fonts/TTF/DejaVuSansMono.ttf",),
+        ]
+    elif bold:
+        paths = [
+            ("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",),
+            ("/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",),
+        ]
+    if paths:
+        for (path,) in paths:
+            if os.path.exists(path):
+                try:
+                    return ImageFont.truetype(path, size)
+                except OSError:
+                    pass
+    return base_font
+
+
+def _measure_segments(
+    segments: list[tuple[str, dict[str, bool]]],
+    draw: ImageDraw.ImageDraw,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    bold_font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    italic_font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    code_font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+) -> float:
+    total = 0.0
+    for text, flags in segments:
+        chosen = font
+        if flags.get("code"):
+            chosen = code_font
+        elif flags.get("bold") and flags.get("italic"):
+            chosen = bold_font
+        elif flags.get("bold"):
+            chosen = bold_font
+        elif flags.get("italic"):
+            chosen = italic_font
+        total += draw.textlength(text, font=chosen)
+    return total
+
+
+def _break_segments_to_lines(
+    segments: list[tuple[str, dict[str, bool]]],
+    draw: ImageDraw.ImageDraw,
+    max_width: int,
+    fonts: dict[str, ImageFont.FreeTypeFont | ImageFont.ImageFont],
+) -> list[list[tuple[str, dict[str, bool]]]]:
+    lines: list[list[tuple[str, dict[str, bool]]]] = [[]]
+    current_width = 0.0
+    for text, flags in segments:
+        chosen = fonts["code"] if flags.get("code") else (
+            fonts["bold"] if flags.get("bold") else (
+                fonts["italic"] if flags.get("italic") else fonts["regular"]
+            )
+        )
+        words = text.split(" ")
+        for index, word in enumerate(words):
+            piece = word if index == 0 else f" {word}"
+            width = draw.textlength(piece, font=chosen)
+            if current_width + width <= max_width or not lines[-1]:
+                lines[-1].append((piece, flags))
+                current_width += width
+            else:
+                lines.append([(piece, flags)])
+                current_width = width
+    return lines
+
+
+def _draw_segments(
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y: int,
+    segments: list[tuple[str, dict[str, bool]]],
+    fonts: dict[str, ImageFont.FreeTypeFont | ImageFont.ImageFont],
+) -> int:
+    cursor = x
+    for piece, flags in segments:
+        chosen = fonts["code"] if flags.get("code") else (
+            fonts["bold"] if flags.get("bold") else (
+                fonts["italic"] if flags.get("italic") else fonts["regular"]
+            )
+        )
+        bbox = draw.textbbox((0, 0), piece, font=chosen)
+        draw.text((cursor - bbox[0], y - bbox[1]), piece, fill=0, font=chosen)
+        cursor += draw.textlength(piece, font=chosen)
+    return cursor
+
+
+def _parse_markdown_blocks(markdown_text: str) -> list[dict[str, Any]]:
+    lines = markdown_text.splitlines()
+    blocks: list[dict[str, Any]] = []
+    in_code = False
+    code_lang = ""
+    code_buf: list[str] = []
+    list_stack: list[dict[str, Any]] = []
+
+    def close_lists(to_level: int) -> None:
+        while len(list_stack) > to_level:
+            blocks.append({"type": "list_end"})
+            list_stack.pop()
+
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        if in_code:
+            if _MD_FENCE_RE.match(line):
+                blocks.append({"type": "code", "lang": code_lang, "lines": code_buf})
+                code_buf = []
+                in_code = False
+            else:
+                code_buf.append(line)
+            i += 1
+            continue
+        if _MD_FENCE_RE.match(line):
+            close_lists(0)
+            in_code = True
+            code_lang = line.strip().lstrip("`").strip()
+            i += 1
+            continue
+        stripped = line.strip()
+        if not stripped:
+            close_lists(0)
+            blocks.append({"type": "blank"})
+            i += 1
+            continue
+        if _MD_HR_RE.match(line):
+            close_lists(0)
+            blocks.append({"type": "hr"})
+            i += 1
+            continue
+        heading = _MD_HEADING_RE.match(line)
+        if heading:
+            close_lists(0)
+            blocks.append({"type": "heading", "level": len(heading.group(1)), "text": heading.group(2).strip()})
+            i += 1
+            continue
+        bq = _MD_BQ_RE.match(line)
+        if bq:
+            close_lists(0)
+            collected = [bq.group(1)]
+            j = i + 1
+            while j < len(lines):
+                next_bq = _MD_BQ_RE.match(lines[j])
+                if not next_bq:
+                    break
+                collected.append(next_bq.group(1))
+                j += 1
+            blocks.append({"type": "blockquote", "lines": collected})
+            i = j
+            continue
+        uli = _MD_ULI_RE.match(line)
+        oli = _MD_OLI_RE.match(line)
+        if uli or oli:
+            indent = len((uli or oli).group(1))
+            level = indent // 2
+            while len(list_stack) < level + 1:
+                list_stack.append({"type": "ul" if uli else "ol", "counter": 0})
+                blocks.append({"type": "list_start", "kind": list_stack[-1]["type"]})
+            while len(list_stack) > level + 1:
+                blocks.append({"type": "list_end"})
+                list_stack.pop()
+            current = list_stack[-1]
+            if (uli and current["type"] != "ul") or (oli and current["type"] != "ol"):
+                blocks.append({"type": "list_end"})
+                list_stack.pop()
+                list_stack.append({"type": "ul" if uli else "ol", "counter": 0})
+                blocks.append({"type": "list_start", "kind": list_stack[-1]["type"]})
+                current = list_stack[-1]
+            if oli:
+                current["counter"] += 1
+                marker = f"{current['counter']}."
+            else:
+                marker = "-"
+            text = (uli.group(2) if uli else oli.group(3))
+            blocks.append({"type": "list_item", "marker": marker, "text": text, "level": level})
+            i += 1
+            continue
+        close_lists(0)
+        blocks.append({"type": "paragraph", "text": line})
+        i += 1
+
+    if in_code:
+        blocks.append({"type": "code", "lang": code_lang, "lines": code_buf})
+    close_lists(0)
+    return blocks
+
+
+def render_markdown(markdown_text: str, options: MarkdownOptions | Settings) -> Image.Image:
+    if _markdown is None:
+        raise RuntimeError("python-markdown is required for the text tab (pip install markdown)")
+
+    if isinstance(options, Settings):
+        opts = MarkdownOptions(font_size=options.font_size, align=options.align)
+    else:
+        opts = options
+
+    if opts.compact:
+        scale = max(0.5, min(1.0, opts.font_size / 32.0))
+        opts = MarkdownOptions(
+            font_size=opts.font_size,
+            align=opts.align,
+            margin_x=max(2, int(opts.margin_x * scale * 0.5)),
+            margin_y=max(2, int(opts.margin_y * scale * 0.5)),
+            line_gap=max(0, opts.line_gap - 1),
+            paragraph_gap=max(2, int(opts.paragraph_gap * 0.6)),
+            list_indent=max(8, int(opts.list_indent * 0.8)),
+            code_padding_x=max(4, int(opts.code_padding_x * 0.7)),
+            code_padding_y=max(3, int(opts.code_padding_y * 0.7)),
+            heading_h1_delta=max(4, int(opts.heading_h1_delta * 0.7)),
+            heading_h2_delta=max(2, int(opts.heading_h2_delta * 0.7)),
+            heading_h3_delta=max(2, int(opts.heading_h3_delta * 0.7)),
+            heading_h4_delta=max(0, int(opts.heading_h4_delta * 0.6)),
+            heading_h5_delta=0,
+            heading_h6_delta=0,
+            content_width=opts.content_width,
+            wrap=opts.wrap,
+            hr_padding=max(4, int(opts.hr_padding * 0.6)),
+            compact=False,
+        )
+
+    body_text = _markdown.markdown(
+        markdown_text,
+        extensions=["fenced_code", "tables", "sane_lists"],
+        output_format="html",
+    )
+    plain_text = re.sub(r"<[^>]+>", "", body_text).strip()
+    if not plain_text:
+        plain_text = markdown_text
+
+    base_font = find_font(opts.font_size)
+    bold_font = _font_for(base_font, 0, bold=True)
+    italic_font = _font_for(base_font, 0, italic=True)
+    code_font = _font_for(base_font, 0, monospace=True)
+    heading_fonts: dict[int, ImageFont.FreeTypeFont | ImageFont.ImageFont] = {}
+    deltas = [
+        opts.heading_h1_delta,
+        opts.heading_h2_delta,
+        opts.heading_h3_delta,
+        opts.heading_h4_delta,
+        opts.heading_h5_delta,
+        opts.heading_h6_delta,
+    ]
+    for level, delta in enumerate(deltas, start=1):
+        heading_fonts[level] = _font_for(base_font, delta, bold=True)
+
+    margin_x = max(0, opts.margin_x)
+    margin_y = max(0, opts.margin_y)
+    if opts.content_width > 0:
+        content_width = min(WIDTH_PX, int(opts.content_width))
+        margin_x = max(margin_x, (WIDTH_PX - content_width) // 2)
+    else:
+        content_width = WIDTH_PX - margin_x * 2
+    content_width = max(40, content_width)
+    if margin_x * 2 + content_width > WIDTH_PX:
+        margin_x = max(0, (WIDTH_PX - content_width) // 2)
+
+    draw = ImageDraw.Draw(Image.new("L", (1, 1), 255))
+
+    blocks = _parse_markdown_blocks(markdown_text)
+    layout: list[dict[str, Any]] = []
+    list_level = 0
+
+    def get_fonts(flags: dict[str, bool]) -> dict[str, ImageFont.FreeTypeFont | ImageFont.ImageFont]:
+        return {
+            "regular": base_font,
+            "bold": bold_font,
+            "italic": italic_font,
+            "code": code_font,
+        }
+
+    def wrap_lines(text: str, font) -> list[str]:
+        if not opts.wrap:
+            return [text]
+        return _wrap_to_width(text, draw, font, content_width)
+
+    cursor_y = margin_y
+    for block in blocks:
+        kind = block.get("type")
+        if kind == "blank":
+            cursor_y += opts.line_gap + 2
+            continue
+        if kind == "hr":
+            cursor_y += max(2, opts.hr_padding // 2)
+            layout.append({"type": "hr", "y": cursor_y, "width": content_width})
+            cursor_y += max(2, opts.hr_padding - opts.hr_padding // 2)
+            continue
+        if kind == "heading":
+            level = block["level"]
+            font = heading_fonts[level]
+            wrapped = wrap_lines(block["text"], font)
+            for line in wrapped:
+                bbox = draw.textbbox((0, 0), line or " ", font=font)
+                height = max(1, bbox[3] - bbox[1])
+                layout.append({
+                    "type": "heading",
+                    "y": cursor_y,
+                    "height": height,
+                    "text": line,
+                    "level": level,
+                })
+                cursor_y += height + max(0, opts.line_gap)
+            cursor_y += opts.paragraph_gap
+            continue
+        if kind == "paragraph":
+            segments = _inline_segments(block["text"])
+            fonts = get_fonts({})
+            if not opts.wrap:
+                line_segs = [segments]
+            else:
+                line_segs = _break_segments_to_lines(segments, draw, content_width, fonts)
+            for line_segments in line_segs:
+                line_text = "".join(piece for piece, _ in line_segments)
+                if not line_text.strip():
+                    continue
+                bbox = draw.textbbox((0, 0), line_text or " ", font=base_font)
+                height = max(1, bbox[3] - bbox[1])
+                layout.append({
+                    "type": "text",
+                    "y": cursor_y,
+                    "height": height,
+                    "segments": line_segments,
+                })
+                cursor_y += height + max(0, opts.line_gap)
+            cursor_y += opts.paragraph_gap
+            continue
+        if kind == "blockquote":
+            inner_indent = max(8, opts.font_size // 2)
+            inner_x = margin_x + inner_indent
+            inner_width = max(40, content_width - inner_indent)
+            first = True
+            for raw_line in block["lines"]:
+                if not opts.wrap:
+                    wrapped = [raw_line]
+                else:
+                    wrapped = _wrap_to_width(raw_line, draw, base_font, inner_width)
+                for line in wrapped:
+                    bbox = draw.textbbox((0, 0), line or " ", font=base_font)
+                    height = max(1, bbox[3] - bbox[1])
+                    layout.append({
+                        "type": "blockquote",
+                        "y": cursor_y,
+                        "height": height,
+                        "text": line,
+                        "x": inner_x,
+                        "bar_top": cursor_y - 2 if first else None,
+                        "bar_bottom": cursor_y + height + 2,
+                    })
+                    first = False
+                    cursor_y += height + max(0, opts.line_gap)
+            cursor_y += opts.paragraph_gap
+            continue
+        if kind == "code":
+            code_lines = block.get("lines") or [""]
+            inner_width = max(40, content_width - opts.code_padding_x * 2)
+            wrapped_lines: list[str] = []
+            for raw in code_lines:
+                if not raw:
+                    wrapped_lines.append("")
+                    continue
+                if not opts.wrap:
+                    wrapped_lines.append(raw)
+                    continue
+                chunks: list[str] = []
+                current = ""
+                for token in raw.split(" "):
+                    candidate = f"{current} {token}" if current else token
+                    if draw.textlength(candidate, font=code_font) <= inner_width:
+                        current = candidate
+                    else:
+                        if current:
+                            chunks.append(current)
+                        while draw.textlength(token, font=code_font) > inner_width:
+                            cut = token[: max(1, len(token) // 2)]
+                            chunks.append(cut)
+                            token = token[len(cut):]
+                        current = token
+                if current:
+                    chunks.append(current)
+                wrapped_lines.extend(chunks)
+            line_heights: list[int] = []
+            for line in wrapped_lines:
+                bbox = draw.textbbox((0, 0), line or " ", font=code_font)
+                line_heights.append(max(1, bbox[3] - bbox[1]))
+            inner_gap = 2
+            block_height = (
+                sum(line_heights)
+                + (len(wrapped_lines) - 1) * inner_gap
+                + opts.code_padding_y * 2
+            )
+            layout.append({
+                "type": "code_block",
+                "y": cursor_y,
+                "height": block_height,
+                "lines": wrapped_lines,
+                "line_heights": line_heights,
+                "padding_y": opts.code_padding_y,
+                "padding_x": opts.code_padding_x,
+                "gap": inner_gap,
+            })
+            cursor_y += block_height + opts.paragraph_gap
+            continue
+        if kind == "list_start":
+            list_level += 1
+            continue
+        if kind == "list_end":
+            list_level = max(0, list_level - 1)
+            cursor_y += max(0, opts.line_gap)
+            continue
+        if kind == "list_item":
+            indent = margin_x + list_level * opts.list_indent
+            marker = block["marker"]
+            segments = _inline_segments(block["text"])
+            fonts = get_fonts({})
+            marker_width = max(
+                draw.textlength(marker + " ", font=base_font),
+                opts.list_indent,
+            )
+            text_x = indent + marker_width
+            available = max(40, content_width - (indent - margin_x) - marker_width)
+            if not opts.wrap:
+                line_segs = [segments]
+            else:
+                line_segs = _break_segments_to_lines(segments, draw, available, fonts)
+            for index, line_segments in enumerate(line_segs):
+                line_text = "".join(piece for piece, _ in line_segments)
+                bbox = draw.textbbox((0, 0), line_text or " ", font=base_font)
+                height = max(1, bbox[3] - bbox[1])
+                layout.append({
+                    "type": "list_item",
+                    "y": cursor_y,
+                    "height": height,
+                    "segments": line_segments,
+                    "marker": marker if index == 0 else "",
+                    "marker_x": indent,
+                    "text_x": text_x,
+                    "level": list_level,
+                })
+                cursor_y += height + max(0, opts.line_gap)
+            continue
+
+    cursor_y += margin_y
+    image = Image.new("L", (WIDTH_PX, max(1, cursor_y)), 255)
+    draw = ImageDraw.Draw(image)
+
+    align = opts.align
+    if align not in {"left", "center", "right"}:
+        align = "left"
+
+    for item in layout:
+        kind = item["type"]
+        if kind == "text":
+            x = _align_x(draw, margin_x, content_width, item["segments"], get_fonts({}), align)
+            _draw_segments(draw, x, item["y"], item["segments"], get_fonts({}))
+        elif kind == "heading":
+            font = heading_fonts[item["level"]]
+            text = item["text"]
+            bbox = draw.textbbox((0, 0), text, font=font)
+            text_width = bbox[2] - bbox[0]
+            if align == "center":
+                x = max(margin_x, margin_x + (content_width - text_width) // 2)
+            elif align == "right":
+                x = max(margin_x, margin_x + content_width - text_width)
+            else:
+                x = margin_x
+            draw.text((x - bbox[0], item["y"] - bbox[1]), text, fill=0, font=font)
+            if item["level"] <= 2:
+                underline_y = item["y"] + item["height"] + 2
+                draw.line((x, underline_y, x + text_width, underline_y), fill=0, width=1)
+        elif kind == "hr":
+            y = item["y"]
+            dash_width = 6
+            gap = 4
+            x = margin_x
+            while x < margin_x + content_width:
+                draw.line((x, y, min(x + dash_width, margin_x + content_width), y), fill=0, width=1)
+                x += dash_width + gap
+        elif kind == "blockquote":
+            text = item["text"]
+            bbox = draw.textbbox((0, 0), text, font=base_font)
+            draw.text((item["x"] - bbox[0], item["y"] - bbox[1]), text, fill=0, font=base_font)
+            if item.get("bar_top") is not None:
+                draw.rectangle((margin_x + 4, item["bar_top"], margin_x + 7, item["bar_bottom"]), fill=180)
+        elif kind == "code_block":
+            draw.rectangle(
+                (margin_x, item["y"], margin_x + content_width, item["y"] + item["height"]),
+                outline=0,
+                width=1,
+            )
+            y = item["y"] + item["padding_y"]
+            for line, line_height in zip(item["lines"], item["line_heights"]):
+                bbox = draw.textbbox((0, 0), line or " ", font=code_font)
+                draw.text(
+                    (margin_x + item["padding_x"] - bbox[0], y - bbox[1]),
+                    line,
+                    fill=0,
+                    font=code_font,
+                )
+                y += line_height + item["gap"]
+        elif kind == "list_item":
+            if item["marker"]:
+                marker_bbox = draw.textbbox((0, 0), item["marker"], font=base_font)
+                if align == "right":
+                    marker_x = margin_x + content_width - _segments_width(draw, item["segments"], get_fonts({})) - marker_bbox[2] + marker_bbox[0]
+                    text_x = margin_x + content_width - _segments_width(draw, item["segments"], get_fonts({}))
+                else:
+                    marker_x = item["marker_x"]
+                    text_x = item["text_x"]
+                draw.text(
+                    (marker_x - marker_bbox[0], item["y"] - marker_bbox[1]),
+                    item["marker"],
+                    fill=0,
+                    font=base_font,
+                )
+                if align == "right":
+                    _draw_segments_right(
+                        draw, text_x, item["y"], item["segments"],
+                        margin_x + content_width, get_fonts({}),
+                    )
+                else:
+                    _draw_segments(draw, text_x, item["y"], item["segments"], get_fonts({}))
+            else:
+                if align == "right":
+                    text_x = margin_x + content_width - _segments_width(draw, item["segments"], get_fonts({}))
+                    _draw_segments_right(
+                        draw, text_x, item["y"], item["segments"],
+                        margin_x + content_width, get_fonts({}),
+                    )
+                else:
+                    _draw_segments(draw, item["text_x"], item["y"], item["segments"], get_fonts({}))
+
+    return image
+
+
+def _segments_width(draw, segments, fonts) -> float:
+    total = 0.0
+    for text, flags in segments:
+        chosen = fonts["code"] if flags.get("code") else (
+            fonts["bold"] if flags.get("bold") else (
+                fonts["italic"] if flags.get("italic") else fonts["regular"]
+            )
+        )
+        total += draw.textlength(text, font=chosen)
+    return total
+
+
+def _align_x(draw, margin_x: int, content_width: int, segments, fonts, align: str) -> int:
+    if align == "center":
+        text_width = _segments_width(draw, segments, fonts)
+        return max(margin_x, margin_x + (content_width - text_width) // 2)
+    if align == "right":
+        text_width = _segments_width(draw, segments, fonts)
+        return max(margin_x, margin_x + content_width - text_width)
+    return margin_x
+
+
+def _draw_segments_right(draw, x_right: int, y: int, segments, right_edge: int, fonts) -> None:
+    cursor = x_right
+    for text, flags in segments:
+        chosen = fonts["code"] if flags.get("code") else (
+            fonts["bold"] if flags.get("bold") else (
+                fonts["italic"] if flags.get("italic") else fonts["regular"]
+            )
+        )
+        bbox = draw.textbbox((0, 0), text, font=chosen)
+        draw.text((cursor - bbox[0], y - bbox[1]), text, fill=0, font=chosen)
+        cursor += draw.textlength(text, font=chosen)
 
 
 def trim_whitespace(image: Image.Image, padding: int = 6) -> Image.Image:

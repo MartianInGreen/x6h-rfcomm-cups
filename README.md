@@ -9,13 +9,6 @@ Tested with:
 - Bluetooth address `B7:2C:83:E6:F8:3E`
 - RFCOMM channel `1`
 
-This is intended for the X6H units where BLE tools can scan the device but fail
-to print with a BlueZ error like:
-
-```text
-org.bluez.Error.BREDR.ProfileUnavailable
-```
-
 ## What It Provides
 
 - `bin/x6h-rfcomm-print`: direct CLI printer script.
@@ -27,7 +20,7 @@ org.bluez.Error.BREDR.ProfileUnavailable
 - `scripts/install-dashboard-service.sh`: optional user service for the web UI.
 
 The printer uses 384-pixel-wide, 1-bit thermal bitmap lines sent over Bluetooth
-RFCOMM/SPP. No `/dev/rfcomm0` binding is required.
+RFCOMM/SPP.
 
 ## Requirements
 
@@ -105,19 +98,33 @@ http://127.0.0.1:8765
 ```
 
 The dashboard prints directly over RFCOMM and does not use CUPS page sizes. It
-has file upload and clipboard paste, fixed-label and auto-length modes, live
-bitmap preview, edge cropping, margin trimming, orientation control, tone
-controls, darkness/speed/feed controls, and raster methods:
+has three tabs:
 
-- No dither (threshold)
-- Threshold only
-- Floyd-Steinberg
-- Ordered dither
-- Atkinson
+- **Image**: file upload and clipboard paste, fixed-label and auto-length
+  modes, live bitmap preview, edge cropping, margin trimming, orientation
+  control, tone controls, darkness/speed/feed controls, and raster methods
+  (no dither / threshold / Floyd-Steinberg / ordered / Atkinson / 4-bit
+  grayscale).
+- **PDF**: upload a PDF, pick a page range, choose DPI, fit, orientation,
+  trim, dither, threshold, brightness and contrast. Each page is shown
+  separately in the preview with prev/next navigation.
+- **Text**: write Markdown directly in the browser with a live preview and
+  print. Supports headings, bold/italic, inline code, fenced code blocks,
+  bullet and numbered lists, blockquotes, horizontal rules, and tables.
+  Choose font size, alignment, dither, threshold, and invert.
 
 Dashboard-only image controls include crop-left/right/top/bottom, brightness,
 contrast, gamma, invert, error-diffusion strength, ordered dither matrix size,
 and serpentine diffusion.
+
+The Text tab uses the `markdown` Python package; the PDF tab uses `pdftoppm`
+from `poppler`. Install both on top of the dashboard's usual Pillow +
+python-lzo requirements:
+
+```bash
+sudo pacman -S --needed python-markdown poppler   # Arch
+sudo apt install python3-markdown poppler-utils   # Debian/Ubuntu
+```
 
 Install it as a user service:
 

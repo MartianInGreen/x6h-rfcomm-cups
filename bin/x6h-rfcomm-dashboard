@@ -10,6 +10,7 @@ import importlib.util
 import io
 import json
 import sys
+import tempfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -85,6 +86,7 @@ HTML = r"""<!doctype html>
       justify-content: space-between;
       gap: 18px;
       min-height: 48px;
+      flex-wrap: wrap;
     }
     h1 {
       margin: 0;
@@ -98,6 +100,33 @@ HTML = r"""<!doctype html>
       font-size: 14px;
       text-align: right;
     }
+    .tabs {
+      grid-column: 1 / -1;
+      display: flex;
+      gap: 4px;
+      border-bottom: 1px solid var(--line);
+    }
+    .tab {
+      appearance: none;
+      background: transparent;
+      border: 1px solid transparent;
+      border-bottom: none;
+      padding: 10px 16px;
+      font: inherit;
+      font-weight: 650;
+      color: var(--muted);
+      cursor: pointer;
+      border-top-left-radius: 8px;
+      border-top-right-radius: 8px;
+      height: auto;
+    }
+    .tab.active {
+      color: var(--ink);
+      background: var(--panel);
+      border-color: var(--line);
+      margin-bottom: -1px;
+    }
+    .tab:hover { color: var(--ink); }
     .panel {
       background: var(--panel);
       border: 1px solid var(--line);
@@ -110,6 +139,8 @@ HTML = r"""<!doctype html>
       gap: 14px;
       align-content: start;
     }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: grid; }
     .drop {
       position: relative;
       min-height: 124px;
@@ -135,6 +166,17 @@ HTML = r"""<!doctype html>
     .drop span {
       color: var(--muted);
       font-size: 13px;
+    }
+    textarea {
+      width: 100%;
+      min-height: 220px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+      background: #fff;
+      color: var(--ink);
+      font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      resize: vertical;
     }
     .group {
       display: grid;
@@ -175,6 +217,7 @@ HTML = r"""<!doctype html>
       gap: 10px;
       align-items: end;
     }
+    .row.three { grid-template-columns: 1fr 1fr 1fr; }
     .check {
       display: flex;
       align-items: center;
@@ -290,6 +333,16 @@ HTML = r"""<!doctype html>
       gap: 12px;
       color: var(--muted);
       font-size: 13px;
+      flex-wrap: wrap;
+    }
+    .preview-nav {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .preview-nav button {
+      height: 32px;
+      padding: 0 12px;
     }
     .preview-stage {
       min-height: 600px;
@@ -318,6 +371,15 @@ HTML = r"""<!doctype html>
       height: auto;
       display: block;
       image-rendering: pixelated;
+    }
+    .paper-text {
+      padding: 8px;
+      width: 100%;
+    }
+    .paper-text img {
+      width: 100%;
+      height: auto;
+      display: block;
     }
     .empty {
       color: var(--muted);
@@ -349,23 +411,29 @@ HTML = r"""<!doctype html>
       <div id="status" class="status"></div>
     </header>
 
-    <section class="panel controls">
+    <div class="tabs" role="tablist">
+      <button class="tab active" data-tab="image" role="tab">Image</button>
+      <button class="tab" data-tab="pdf" role="tab">PDF</button>
+      <button class="tab" data-tab="text" role="tab">Text</button>
+    </div>
+
+    <section class="panel controls" id="tab-image" data-tab-panel="image">
       <label class="drop">
-        <input id="file" type="file" accept="image/*">
-        <span><strong>Select or paste image</strong><span id="fileName">PNG, JPEG, WebP, BMP, clipboard</span></span>
+        <input id="imageFile" type="file" accept="image/*">
+        <span><strong>Select or paste image</strong><span id="imageFileName">PNG, JPEG, WebP, BMP, clipboard</span></span>
       </label>
 
       <div class="group">
         <div class="group-title">Layout</div>
         <label>Length
-          <select id="lengthMode">
+          <select id="imageLengthMode">
             <option value="auto">Auto length</option>
             <option value="fixed">Fixed label</option>
           </select>
         </label>
         <div class="row">
           <label>Fixed length
-            <select id="lengthMm">
+            <select id="imageLengthMm">
               <option value="20">20 mm</option>
               <option value="30">30 mm</option>
               <option value="40">40 mm</option>
@@ -378,7 +446,7 @@ HTML = r"""<!doctype html>
             </select>
           </label>
           <label>Fit
-            <select id="fit">
+            <select id="imageFit">
               <option value="contain">Contain</option>
               <option value="cover">Cover</option>
               <option value="full-width" selected>Full width</option>
@@ -386,21 +454,21 @@ HTML = r"""<!doctype html>
           </label>
         </div>
         <label>Orientation
-          <select id="orientation">
+          <select id="imageOrientation">
             <option value="auto" selected>Auto</option>
             <option value="as-is">As is</option>
             <option value="rotate-cw">Rotate CW</option>
             <option value="rotate-ccw">Rotate CCW</option>
           </select>
         </label>
-        <label class="check">Trim white margins <input id="trim" type="checkbox" checked></label>
+        <label class="check">Trim white margins <input id="imageTrim" type="checkbox" checked></label>
       </div>
 
       <div class="group">
         <div class="group-title">Crop</div>
-        <div id="cropper" class="cropper hidden">
-          <img id="cropImage" alt="">
-          <div id="cropBox" class="crop-box">
+        <div id="imageCropper" class="cropper hidden">
+          <img id="imageCropImage" alt="">
+          <div id="imageCropBox" class="crop-box">
             <div class="crop-grid"></div>
             <span class="crop-handle" data-handle="nw"></span>
             <span class="crop-handle" data-handle="n"></span>
@@ -413,14 +481,14 @@ HTML = r"""<!doctype html>
           </div>
         </div>
         <div class="crop-actions">
-          <button id="resetCrop" type="button">Reset crop</button>
+          <button id="imageResetCrop" type="button">Reset crop</button>
         </div>
       </div>
 
       <div class="group">
         <div class="group-title">Raster</div>
         <label>Dither
-          <select id="dither">
+          <select id="imageDither">
             <option value="none">No dither (threshold)</option>
             <option value="grayscale">Grayscale</option>
             <option value="threshold">Threshold only</option>
@@ -430,210 +498,463 @@ HTML = r"""<!doctype html>
           </select>
         </label>
         <div class="row">
-          <label>Strength <input id="ditherStrength" type="range" min="0" max="1.5" step="0.05" value="1"></label>
-          <input id="ditherStrengthNumber" type="number" min="0" max="1.5" step="0.05" value="1">
+          <label>Strength <input id="imageDitherStrength" type="range" min="0" max="1.5" step="0.05" value="1"></label>
+          <input id="imageDitherStrengthNumber" type="number" min="0" max="1.5" step="0.05" value="1">
         </div>
         <label>Ordered size
-          <select id="orderedSize">
+          <select id="imageOrderedSize">
             <option value="4">4 x 4</option>
             <option value="8" selected>8 x 8</option>
           </select>
         </label>
-        <label class="check">Serpentine diffusion <input id="serpentine" type="checkbox" checked></label>
+        <label class="check">Serpentine diffusion <input id="imageSerpentine" type="checkbox" checked></label>
         <div class="row">
-          <label>Threshold <input id="threshold" type="range" min="80" max="230" value="180"></label>
-          <input id="thresholdNumber" type="number" min="80" max="230" value="180">
+          <label>Threshold <input id="imageThreshold" type="range" min="80" max="230" value="180"></label>
+          <input id="imageThresholdNumber" type="number" min="80" max="230" value="180">
         </div>
         <div class="row">
-          <label>Brightness <input id="brightness" type="range" min="0.4" max="2.2" step="0.05" value="1"></label>
-          <input id="brightnessNumber" type="number" min="0.4" max="2.2" step="0.05" value="1">
+          <label>Brightness <input id="imageBrightness" type="range" min="0.4" max="2.2" step="0.05" value="1"></label>
+          <input id="imageBrightnessNumber" type="number" min="0.4" max="2.2" step="0.05" value="1">
         </div>
         <div class="row">
-          <label>Contrast <input id="contrast" type="range" min="0.4" max="2.5" step="0.05" value="1"></label>
-          <input id="contrastNumber" type="number" min="0.4" max="2.5" step="0.05" value="1">
+          <label>Contrast <input id="imageContrast" type="range" min="0.4" max="2.5" step="0.05" value="1"></label>
+          <input id="imageContrastNumber" type="number" min="0.4" max="2.5" step="0.05" value="1">
         </div>
         <div class="row">
-          <label>Gamma <input id="gamma" type="range" min="0.4" max="2.5" step="0.05" value="1"></label>
-          <input id="gammaNumber" type="number" min="0.4" max="2.5" step="0.05" value="1">
+          <label>Gamma <input id="imageGamma" type="range" min="0.4" max="2.5" step="0.05" value="1"></label>
+          <input id="imageGammaNumber" type="number" min="0.4" max="2.5" step="0.05" value="1">
         </div>
-        <label class="check">Invert <input id="invert" type="checkbox"></label>
+        <label class="check">Invert <input id="imageInvert" type="checkbox"></label>
+      </div>
+
+      <div class="actions">
+        <button id="imagePreviewBtn">Preview</button>
+        <button id="imagePrintBtn" class="primary" disabled>Print</button>
+      </div>
+    </section>
+
+    <section class="panel controls tab-panel" id="tab-pdf" data-tab-panel="pdf">
+      <label class="drop">
+        <input id="pdfFile" type="file" accept="application/pdf,.pdf">
+        <span><strong>Select PDF</strong><span id="pdfFileName">Multi-page documents, .pdf</span></span>
+      </label>
+
+      <div class="group">
+        <div class="group-title">Pages</div>
+        <div class="row">
+          <label>From page
+            <input id="pdfFrom" type="number" min="1" value="1">
+          </label>
+          <label>To
+            <input id="pdfTo" type="number" min="1" value="9999">
+          </label>
+        </div>
+        <div class="row">
+          <label>DPI
+            <select id="pdfDpi">
+              <option value="150">150</option>
+              <option value="203" selected>203</option>
+              <option value="300">300</option>
+            </select>
+          </label>
+          <label>Orientation
+            <select id="pdfOrientation">
+              <option value="auto" selected>Auto</option>
+              <option value="as-is">As is</option>
+              <option value="rotate-cw">Rotate CW</option>
+              <option value="rotate-ccw">Rotate CCW</option>
+            </select>
+          </label>
+        </div>
+        <label>Fit
+          <select id="pdfFit">
+            <option value="fit-width" selected>Fit width</option>
+            <option value="native">Native size</option>
+          </select>
+        </label>
+        <label class="check">Trim white margins <input id="pdfTrim" type="checkbox" checked></label>
       </div>
 
       <div class="group">
-        <div class="group-title">Printer</div>
+        <div class="group-title">Raster</div>
+        <label>Dither
+          <select id="pdfDither">
+            <option value="none">No dither (threshold)</option>
+            <option value="threshold">Threshold only</option>
+            <option value="floyd-steinberg" selected>Floyd-Steinberg</option>
+            <option value="ordered">Ordered</option>
+            <option value="atkinson">Atkinson</option>
+          </select>
+        </label>
         <div class="row">
-          <label>Darkness <input id="darkness" type="range" min="6000" max="14000" step="250" value="9500"></label>
-          <input id="darknessNumber" type="number" min="6000" max="14000" step="250" value="9500">
+          <label>Threshold <input id="pdfThreshold" type="range" min="80" max="230" value="180"></label>
+          <input id="pdfThresholdNumber" type="number" min="80" max="230" value="180">
         </div>
         <div class="row">
-          <label>Speed <input id="speed" type="range" min="4" max="16" value="10"></label>
-          <input id="speedNumber" type="number" min="4" max="16" value="10">
+          <label>Brightness <input id="pdfBrightness" type="range" min="0.4" max="2.2" step="0.05" value="1"></label>
+          <input id="pdfBrightnessNumber" type="number" min="0.4" max="2.2" step="0.05" value="1">
         </div>
         <div class="row">
-          <label>Feed lines <input id="feedLines" type="range" min="0" max="160" value="60"></label>
-          <input id="feedLinesNumber" type="number" min="0" max="160" value="60">
+          <label>Contrast <input id="pdfContrast" type="range" min="0.4" max="2.5" step="0.05" value="1"></label>
+          <input id="pdfContrastNumber" type="number" min="0.4" max="2.5" step="0.05" value="1">
         </div>
       </div>
 
       <div class="actions">
-        <button id="previewBtn">Preview</button>
-        <button id="printBtn" class="primary" disabled>Print</button>
+        <button id="pdfPreviewBtn">Preview</button>
+        <button id="pdfPrintBtn" class="primary" disabled>Print</button>
+      </div>
+    </section>
+
+    <section class="panel controls tab-panel" id="tab-text" data-tab-panel="text">
+      <label class="group">
+        <div class="group-title">Markdown</div>
+        <textarea id="textSource" placeholder="# Title&#10;&#10;Hello **world** in *italic*.&#10;&#10;- item one&#10;- item two"></textarea>
+        <div class="crop-actions" style="grid-template-columns: 1fr 1fr;">
+          <button id="textSample" type="button">Load sample</button>
+          <button id="textClear" type="button">Clear</button>
+        </div>
+      </label>
+
+      <div class="group">
+        <div class="group-title">Layout</div>
+        <div class="row">
+          <label>Font size
+            <select id="textFontSize">
+              <option value="14">14 px (tiny)</option>
+              <option value="16">16 px</option>
+              <option value="18">18 px</option>
+              <option value="20">20 px</option>
+              <option value="24">24 px</option>
+              <option value="28">28 px</option>
+              <option value="32" selected>32 px</option>
+              <option value="36">36 px</option>
+              <option value="40">40 px</option>
+              <option value="48">48 px (large)</option>
+            </select>
+          </label>
+          <label>Align
+            <select id="textAlign">
+              <option value="left" selected>Left</option>
+              <option value="center">Center</option>
+              <option value="right">Right</option>
+            </select>
+          </label>
+        </div>
+        <label class="check">Compact spacing <input id="textCompact" type="checkbox"></label>
+        <label class="check">Word wrap <input id="textWrap" type="checkbox" checked></label>
+      </div>
+
+      <div class="group">
+        <div class="group-title">Margins &amp; width</div>
+        <div class="row">
+          <label>Side margin <input id="textMarginX" type="range" min="0" max="32" value="8"></label>
+          <input id="textMarginXNumber" type="number" min="0" max="32" value="8">
+        </div>
+        <div class="row">
+          <label>Top margin <input id="textMarginY" type="range" min="0" max="32" value="8"></label>
+          <input id="textMarginYNumber" type="number" min="0" max="32" value="8">
+        </div>
+        <div class="row">
+          <label>Print width
+            <select id="textContentWidth">
+              <option value="0" selected>Full (384 px)</option>
+              <option value="320">Narrow (320 px)</option>
+              <option value="256">Cinema (256 px)</option>
+              <option value="192">Tight (192 px)</option>
+            </select>
+          </label>
+          <label>HR padding
+            <select id="textHrPadding">
+              <option value="4">4 px</option>
+              <option value="8" selected>8 px</option>
+              <option value="12">12 px</option>
+              <option value="16">16 px</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-title">Spacing</div>
+        <div class="row">
+          <label>Line gap <input id="textLineGap" type="range" min="0" max="10" value="2"></label>
+          <input id="textLineGapNumber" type="number" min="0" max="10" value="2">
+        </div>
+        <div class="row">
+          <label>Block gap <input id="textParagraphGap" type="range" min="0" max="20" value="6"></label>
+          <input id="textParagraphGapNumber" type="number" min="0" max="20" value="6">
+        </div>
+        <div class="row">
+          <label>List indent
+            <select id="textListIndent">
+              <option value="8">8 px</option>
+              <option value="12" selected>12 px</option>
+              <option value="16">16 px</option>
+              <option value="20">20 px</option>
+            </select>
+          </label>
+          <label>Code pad
+            <select id="textCodePadding">
+              <option value="4">4 px</option>
+              <option value="6">6 px</option>
+              <option value="8" selected>8 px</option>
+              <option value="12">12 px</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-title">Headings</div>
+        <div class="row">
+          <label>H1 step
+            <select id="textHeadingH1">
+              <option value="4">+4 px</option>
+              <option value="8">+8 px</option>
+              <option value="14" selected>+14 px</option>
+              <option value="20">+20 px</option>
+            </select>
+          </label>
+          <label>H2 step
+            <select id="textHeadingH2">
+              <option value="2">+2 px</option>
+              <option value="6">+6 px</option>
+              <option value="10" selected>+10 px</option>
+              <option value="14">+14 px</option>
+            </select>
+          </label>
+        </div>
+        <div class="row">
+          <label>H3 step
+            <select id="textHeadingH3">
+              <option value="0">+0 px</option>
+              <option value="4">+4 px</option>
+              <option value="6" selected>+6 px</option>
+              <option value="8">+8 px</option>
+            </select>
+          </label>
+          <label>H4 step
+            <select id="textHeadingH4">
+              <option value="0">+0 px</option>
+              <option value="2">+2 px</option>
+              <option value="4" selected>+4 px</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div class="group">
+        <div class="group-title">Raster</div>
+        <label>Dither
+          <select id="textDither">
+            <option value="none">No dither (threshold)</option>
+            <option value="threshold">Threshold only</option>
+            <option value="floyd-steinberg" selected>Floyd-Steinberg</option>
+            <option value="ordered">Ordered</option>
+            <option value="atkinson">Atkinson</option>
+          </select>
+        </label>
+        <div class="row">
+          <label>Threshold <input id="textThreshold" type="range" min="80" max="230" value="180"></label>
+          <input id="textThresholdNumber" type="number" min="80" max="230" value="180">
+        </div>
+        <label class="check">Invert <input id="textInvert" type="checkbox"></label>
+      </div>
+
+      <div class="actions">
+        <button id="textPreviewBtn">Preview</button>
+        <button id="textPrintBtn" class="primary">Print</button>
       </div>
     </section>
 
     <section class="panel preview-wrap">
       <div class="preview-head">
         <span id="previewMeta">384 px print width</span>
+        <div class="preview-nav">
+          <span id="pageIndicator"></span>
+          <button id="prevPage" type="button">&larr;</button>
+          <button id="nextPage" type="button">&rarr;</button>
+        </div>
         <span id="addrMeta"></span>
       </div>
       <div class="preview-stage">
-        <div class="paper" id="paper"><div class="empty">Select an image</div></div>
+        <div class="paper" id="paper"><div class="empty">Select a file or type some markdown</div></div>
       </div>
     </section>
   </main>
 
   <script>
-    const ids = [
-      "file", "fileName", "status", "paper", "previewMeta", "addrMeta",
-      "lengthMode", "lengthMm", "fit", "orientation", "trim", "dither",
-      "cropper", "cropImage", "cropBox", "resetCrop",
-      "ditherStrength", "ditherStrengthNumber", "orderedSize", "serpentine",
-      "brightness", "brightnessNumber", "contrast", "contrastNumber",
-      "gamma", "gammaNumber", "invert",
-      "threshold", "thresholdNumber", "darkness", "darknessNumber",
-      "speed", "speedNumber", "feedLines", "feedLinesNumber",
-      "previewBtn", "printBtn"
-    ];
-    const el = Object.fromEntries(ids.map(id => [id, document.getElementById(id)]));
-    let imageData = null;
-    let debounce = null;
-    let crop = { x: 0, y: 0, w: 100, h: 100 };
-    let drag = null;
+    const $ = id => document.getElementById(id);
+    const TABS = ["image", "pdf", "text"];
+    let activeTab = "image";
 
-    function bindPair(a, b) {
-      el[a].addEventListener("input", () => { el[b].value = el[a].value; schedulePreview(); });
-      el[b].addEventListener("input", () => { el[a].value = el[b].value; schedulePreview(); });
+    function setTab(name) {
+      activeTab = name;
+      document.querySelectorAll(".tab").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.tab === name);
+      });
+      document.querySelectorAll("[data-tab-panel]").forEach(panel => {
+        const isActive = panel.dataset.tabPanel === name;
+        panel.classList.toggle("tab-panel", !isActive);
+        panel.classList.toggle("active", isActive);
+      });
+      $("status").textContent = "";
+      $("status").className = "status";
+      $("pageIndicator").textContent = "";
     }
-
-    bindPair("threshold", "thresholdNumber");
-    bindPair("ditherStrength", "ditherStrengthNumber");
-    bindPair("brightness", "brightnessNumber");
-    bindPair("contrast", "contrastNumber");
-    bindPair("gamma", "gammaNumber");
-    bindPair("darkness", "darknessNumber");
-    bindPair("speed", "speedNumber");
-    bindPair("feedLines", "feedLinesNumber");
-
-    ["lengthMode", "lengthMm", "fit", "orientation", "trim", "dither", "orderedSize", "serpentine", "invert"].forEach(id => {
-      el[id].addEventListener("input", schedulePreview);
-      el[id].addEventListener("change", schedulePreview);
+    document.querySelectorAll(".tab").forEach(btn => {
+      btn.addEventListener("click", () => setTab(btn.dataset.tab));
     });
+
+    function bindPair(a, b, onChange) {
+      const handler = () => onChange && onChange();
+      $(a).addEventListener("input", () => { $(b).value = $(a).value; handler(); });
+      $(b).addEventListener("input", () => { $(a).value = $(b).value; handler(); });
+    }
 
     function clamp(value, min, max) {
       return Math.min(max, Math.max(min, value));
     }
 
-    function setCrop(next) {
+    // === Image tab ===================================================
+    let imageData = null;
+    let imageCrop = { x: 0, y: 0, w: 100, h: 100 };
+    let imageDrag = null;
+    let imageDebounce = null;
+
+    bindPair("imageThreshold", "imageThresholdNumber", scheduleImagePreview);
+    bindPair("imageDitherStrength", "imageDitherStrengthNumber", scheduleImagePreview);
+    bindPair("imageBrightness", "imageBrightnessNumber", scheduleImagePreview);
+    bindPair("imageContrast", "imageContrastNumber", scheduleImagePreview);
+    bindPair("imageGamma", "imageGammaNumber", scheduleImagePreview);
+    bindPair("pdfThreshold", "pdfThresholdNumber", schedulePdfPreview);
+    bindPair("pdfBrightness", "pdfBrightnessNumber", schedulePdfPreview);
+    bindPair("pdfContrast", "pdfContrastNumber", schedulePdfPreview);
+    bindPair("textThreshold", "textThresholdNumber", scheduleTextPreview);
+    bindPair("textMarginX", "textMarginXNumber", scheduleTextPreview);
+    bindPair("textMarginY", "textMarginYNumber", scheduleTextPreview);
+    bindPair("textLineGap", "textLineGapNumber", scheduleTextPreview);
+    bindPair("textParagraphGap", "textParagraphGapNumber", scheduleTextPreview);
+
+    [
+      "imageLengthMode", "imageLengthMm", "imageFit", "imageOrientation", "imageTrim",
+      "imageDither", "imageOrderedSize", "imageSerpentine", "imageInvert",
+    ].forEach(id => {
+      $(id).addEventListener("input", scheduleImagePreview);
+      $(id).addEventListener("change", scheduleImagePreview);
+    });
+    [
+      "pdfFrom", "pdfTo", "pdfDpi", "pdfOrientation", "pdfFit", "pdfTrim", "pdfDither",
+    ].forEach(id => {
+      $(id).addEventListener("input", schedulePdfPreview);
+      $(id).addEventListener("change", schedulePdfPreview);
+    });
+    [
+      "textSource", "textFontSize", "textAlign", "textDither", "textInvert",
+      "textCompact", "textWrap", "textContentWidth", "textHrPadding",
+      "textListIndent", "textCodePadding",
+      "textHeadingH1", "textHeadingH2", "textHeadingH3", "textHeadingH4",
+    ].forEach(id => {
+      $(id).addEventListener("input", scheduleTextPreview);
+      $(id).addEventListener("change", scheduleTextPreview);
+    });
+
+    function setImageCrop(next) {
       const minSize = 5;
       next.w = clamp(next.w, minSize, 100);
       next.h = clamp(next.h, minSize, 100);
       next.x = clamp(next.x, 0, 100 - next.w);
       next.y = clamp(next.y, 0, 100 - next.h);
-      crop = next;
-      renderCrop();
-      schedulePreview();
+      imageCrop = next;
+      renderImageCrop();
+      scheduleImagePreview();
     }
 
-    function renderCrop() {
-      const host = el.cropper.getBoundingClientRect();
-      const image = el.cropImage.getBoundingClientRect();
-      const left = image.left - host.left + image.width * crop.x / 100;
-      const top = image.top - host.top + image.height * crop.y / 100;
-      el.cropBox.style.left = `${left}px`;
-      el.cropBox.style.top = `${top}px`;
-      el.cropBox.style.width = `${image.width * crop.w / 100}px`;
-      el.cropBox.style.height = `${image.height * crop.h / 100}px`;
+    function renderImageCrop() {
+      const host = $("imageCropper").getBoundingClientRect();
+      const img = $("imageCropImage").getBoundingClientRect();
+      const left = img.left - host.left + img.width * imageCrop.x / 100;
+      const top = img.top - host.top + img.height * imageCrop.y / 100;
+      const box = $("imageCropBox");
+      box.style.left = `${left}px`;
+      box.style.top = `${top}px`;
+      box.style.width = `${img.width * imageCrop.w / 100}px`;
+      box.style.height = `${img.height * imageCrop.h / 100}px`;
     }
 
-    function cropFromDrag(event) {
-      if (!drag) return;
-      const image = el.cropImage.getBoundingClientRect();
-      const dx = (event.clientX - drag.startX) / image.width * 100;
-      const dy = (event.clientY - drag.startY) / image.height * 100;
-      const start = drag.startCrop;
+    function imageCropDrag(event) {
+      if (!imageDrag) return;
+      const img = $("imageCropImage").getBoundingClientRect();
+      const dx = (event.clientX - imageDrag.startX) / img.width * 100;
+      const dy = (event.clientY - imageDrag.startY) / img.height * 100;
+      const start = imageDrag.startCrop;
       const next = { ...start };
       const minSize = 5;
-
-      if (drag.handle === "move") {
+      if (imageDrag.handle === "move") {
         next.x = start.x + dx;
         next.y = start.y + dy;
       } else {
-        if (drag.handle.includes("w")) {
+        if (imageDrag.handle.includes("w")) {
           const right = start.x + start.w;
           next.x = clamp(start.x + dx, 0, right - minSize);
           next.w = right - next.x;
         }
-        if (drag.handle.includes("e")) {
+        if (imageDrag.handle.includes("e")) {
           next.w = clamp(start.w + dx, minSize, 100 - start.x);
         }
-        if (drag.handle.includes("n")) {
+        if (imageDrag.handle.includes("n")) {
           const bottom = start.y + start.h;
           next.y = clamp(start.y + dy, 0, bottom - minSize);
           next.h = bottom - next.y;
         }
-        if (drag.handle.includes("s")) {
+        if (imageDrag.handle.includes("s")) {
           next.h = clamp(start.h + dy, minSize, 100 - start.y);
         }
       }
-      setCrop(next);
+      setImageCrop(next);
     }
 
-    el.cropBox.addEventListener("pointerdown", event => {
+    $("imageCropBox").addEventListener("pointerdown", event => {
       event.preventDefault();
       const handle = event.target.dataset.handle || "move";
-      drag = {
-        handle,
-        startX: event.clientX,
-        startY: event.clientY,
-        startCrop: { ...crop }
-      };
-      el.cropBox.setPointerCapture(event.pointerId);
+      imageDrag = { handle, startX: event.clientX, startY: event.clientY, startCrop: { ...imageCrop } };
+      $("imageCropBox").setPointerCapture(event.pointerId);
     });
-    el.cropBox.addEventListener("pointermove", cropFromDrag);
-    el.cropBox.addEventListener("pointerup", event => {
-      drag = null;
-      el.cropBox.releasePointerCapture(event.pointerId);
+    $("imageCropBox").addEventListener("pointermove", imageCropDrag);
+    $("imageCropBox").addEventListener("pointerup", event => {
+      imageDrag = null;
+      $("imageCropBox").releasePointerCapture(event.pointerId);
     });
-    el.cropBox.addEventListener("pointercancel", () => { drag = null; });
-    el.resetCrop.addEventListener("click", () => setCrop({ x: 0, y: 0, w: 100, h: 100 }));
-    el.cropImage.addEventListener("load", renderCrop);
-    window.addEventListener("resize", renderCrop);
+    $("imageCropBox").addEventListener("pointercancel", () => { imageDrag = null; });
+    $("imageResetCrop").addEventListener("click", () => setImageCrop({ x: 0, y: 0, w: 100, h: 100 }));
+    $("imageCropImage").addEventListener("load", renderImageCrop);
+    window.addEventListener("resize", renderImageCrop);
 
     function loadImageData(dataUrl, label) {
       imageData = dataUrl;
-      el.fileName.textContent = label;
-      el.cropImage.src = imageData;
-      el.cropper.classList.remove("hidden");
-      setCrop({ x: 0, y: 0, w: 100, h: 100 });
-      el.printBtn.disabled = false;
-      preview();
+      $("imageFileName").textContent = label;
+      $("imageCropImage").src = dataUrl;
+      $("imageCropper").classList.remove("hidden");
+      setImageCrop({ x: 0, y: 0, w: 100, h: 100 });
+      $("imagePrintBtn").disabled = false;
+      previewImage();
     }
 
     function readImageFile(file, label) {
       const reader = new FileReader();
-      reader.onload = () => {
-        loadImageData(reader.result, label);
-      };
+      reader.onload = () => loadImageData(reader.result, label);
       reader.readAsDataURL(file);
     }
 
-    el.file.addEventListener("change", () => {
-      const file = el.file.files[0];
+    $("imageFile").addEventListener("change", () => {
+      const file = $("imageFile").files[0];
       if (!file) return;
       readImageFile(file, file.name);
     });
 
     window.addEventListener("paste", event => {
+      if (activeTab !== "image") return;
       const items = Array.from(event.clipboardData?.items || []);
       const imageItem = items.find(item => item.kind === "file" && item.type.startsWith("image/"));
       if (!imageItem) return;
@@ -643,84 +964,287 @@ HTML = r"""<!doctype html>
       readImageFile(file, "Pasted image");
     });
 
-    el.previewBtn.addEventListener("click", preview);
-    el.printBtn.addEventListener("click", printImage);
+    $("imagePreviewBtn").addEventListener("click", previewImage);
+    $("imagePrintBtn").addEventListener("click", printImage);
 
-    function settings() {
+    function imageSettings() {
       return {
-        lengthMode: el.lengthMode.value,
-        lengthMm: Number(el.lengthMm.value),
-        fit: el.fit.value,
-        orientation: el.orientation.value,
-        trim: el.trim.checked,
-        cropLeft: crop.x,
-        cropRight: 100 - crop.x - crop.w,
-        cropTop: crop.y,
-        cropBottom: 100 - crop.y - crop.h,
-        dither: el.dither.value,
-        ditherStrength: Number(el.ditherStrength.value),
-        orderedSize: Number(el.orderedSize.value),
-        serpentine: el.serpentine.checked,
-        threshold: Number(el.threshold.value),
-        brightness: Number(el.brightness.value),
-        contrast: Number(el.contrast.value),
-        gamma: Number(el.gamma.value),
-        invert: el.invert.checked,
-        darkness: Number(el.darkness.value),
-        speed: Number(el.speed.value),
-        feedLines: Number(el.feedLines.value)
+        lengthMode: $("imageLengthMode").value,
+        lengthMm: Number($("imageLengthMm").value),
+        fit: $("imageFit").value,
+        orientation: $("imageOrientation").value,
+        trim: $("imageTrim").checked,
+        cropLeft: imageCrop.x,
+        cropRight: 100 - imageCrop.x - imageCrop.w,
+        cropTop: imageCrop.y,
+        cropBottom: 100 - imageCrop.y - imageCrop.h,
+        dither: $("imageDither").value,
+        ditherStrength: Number($("imageDitherStrength").value),
+        orderedSize: Number($("imageOrderedSize").value),
+        serpentine: $("imageSerpentine").checked,
+        threshold: Number($("imageThreshold").value),
+        brightness: Number($("imageBrightness").value),
+        contrast: Number($("imageContrast").value),
+        gamma: Number($("imageGamma").value),
+        invert: $("imageInvert").checked,
+        darkness: 9500,
+        speed: 10,
+        feedLines: 60,
       };
     }
 
-    function schedulePreview() {
+    function scheduleImagePreview() {
       if (!imageData) return;
-      clearTimeout(debounce);
-      debounce = setTimeout(preview, 180);
+      clearTimeout(imageDebounce);
+      imageDebounce = setTimeout(previewImage, 180);
     }
 
-    async function request(path) {
+    async function previewImage() {
+      if (!imageData) return;
+      setStatus("Rendering");
+      try {
+        const body = await postJson("/api/image/preview", {
+          image: imageData,
+          settings: imageSettings(),
+        });
+        showPages(body.pages, 0);
+        $("addrMeta").textContent = body.raster || "";
+        setStatus(body.warning || "Ready", !!body.warning);
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    }
+
+    async function printImage() {
+      if (!imageData) return;
+      $("imagePrintBtn").disabled = true;
+      setStatus("Printing");
+      try {
+        const body = await postJson("/api/image/print", {
+          image: imageData,
+          settings: imageSettings(),
+        });
+        setStatus(body.message);
+      } catch (error) {
+        setStatus(error.message, true);
+      } finally {
+        $("imagePrintBtn").disabled = false;
+      }
+    }
+
+    // === PDF tab =====================================================
+    let pdfData = null;
+    let pdfPages = [];
+    let pdfIndex = 0;
+    let pdfDebounce = null;
+
+    function readPdfFile(file) {
+      const reader = new FileReader();
+      reader.onload = () => {
+        pdfData = reader.result;
+        $("pdfFileName").textContent = file.name;
+        $("pdfPrintBtn").disabled = false;
+        schedulePdfPreview();
+      };
+      reader.readAsDataURL(file);
+    }
+
+    $("pdfFile").addEventListener("change", () => {
+      const file = $("pdfFile").files[0];
+      if (!file) return;
+      readPdfFile(file);
+    });
+
+    $("pdfPreviewBtn").addEventListener("click", previewPdf);
+    $("pdfPrintBtn").addEventListener("click", printPdf);
+
+    function pdfSettings() {
+      return {
+        from: Math.max(1, parseInt($("pdfFrom").value, 10) || 1),
+        to: Math.max(1, parseInt($("pdfTo").value, 10) || 9999),
+        dpi: Number($("pdfDpi").value),
+        orientation: $("pdfOrientation").value,
+        fit: $("pdfFit").value,
+        trim: $("pdfTrim").checked,
+        dither: $("pdfDither").value,
+        threshold: Number($("pdfThreshold").value),
+        brightness: Number($("pdfBrightness").value),
+        contrast: Number($("pdfContrast").value),
+      };
+    }
+
+    function schedulePdfPreview() {
+      if (!pdfData) return;
+      clearTimeout(pdfDebounce);
+      pdfDebounce = setTimeout(previewPdf, 200);
+    }
+
+    async function previewPdf() {
+      if (!pdfData) return;
+      setStatus("Rendering");
+      try {
+        const body = await postJson("/api/pdf/preview", {
+          pdf: pdfData,
+          settings: pdfSettings(),
+        });
+        pdfPages = body.pages;
+        pdfIndex = 0;
+        showPages(pdfPages, pdfIndex);
+        $("addrMeta").textContent = `${pdfPages.length} page${pdfPages.length === 1 ? "" : "s"}`;
+        setStatus(body.warning || "Ready", !!body.warning);
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    }
+
+    async function printPdf() {
+      if (!pdfData) return;
+      $("pdfPrintBtn").disabled = true;
+      setStatus("Printing");
+      try {
+        const body = await postJson("/api/pdf/print", {
+          pdf: pdfData,
+          settings: pdfSettings(),
+        });
+        setStatus(body.message);
+      } catch (error) {
+        setStatus(error.message, true);
+      } finally {
+        $("pdfPrintBtn").disabled = false;
+      }
+    }
+
+    // === Text tab ====================================================
+    const SAMPLE_MARKDOWN = `# X6H Print Test
+
+Hello **bold**, *italic*, and \`code\`.
+
+## Receipt
+
+| Item   | Qty | Price |
+|--------|-----|-------|
+| Apple  | 2   | 1.20  |
+| Bread  | 1   | 2.50  |
+
+> Thanks for shopping with us!
+
+1. First step
+2. Second step
+3. Third step
+
+\`\`\`
+print('hello')
+\`\`\`
+`;
+
+    let textDebounce = null;
+    $("textSample").addEventListener("click", () => {
+      $("textSource").value = SAMPLE_MARKDOWN;
+      scheduleTextPreview();
+    });
+    $("textClear").addEventListener("click", () => {
+      $("textSource").value = "";
+      scheduleTextPreview();
+    });
+
+    function textSettings() {
+      return {
+        source: $("textSource").value,
+        fontSize: Number($("textFontSize").value),
+        align: $("textAlign").value,
+        compact: $("textCompact").checked,
+        wrap: $("textWrap").checked,
+        marginX: Number($("textMarginX").value),
+        marginY: Number($("textMarginY").value),
+        lineGap: Number($("textLineGap").value),
+        paragraphGap: Number($("textParagraphGap").value),
+        contentWidth: Number($("textContentWidth").value),
+        hrPadding: Number($("textHrPadding").value),
+        listIndent: Number($("textListIndent").value),
+        codePadding: Number($("textCodePadding").value),
+        headingH1Delta: Number($("textHeadingH1").value),
+        headingH2Delta: Number($("textHeadingH2").value),
+        headingH3Delta: Number($("textHeadingH3").value),
+        headingH4Delta: Number($("textHeadingH4").value),
+        dither: $("textDither").value,
+        threshold: Number($("textThreshold").value),
+        invert: $("textInvert").checked,
+      };
+    }
+
+    function scheduleTextPreview() {
+      clearTimeout(textDebounce);
+      textDebounce = setTimeout(previewText, 200);
+    }
+
+    async function previewText() {
+      setStatus("Rendering");
+      try {
+        const body = await postJson("/api/text/preview", { settings: textSettings() });
+        showPages(body.pages, 0);
+        $("addrMeta").textContent = body.raster || "";
+        setStatus(body.warning || "Ready", !!body.warning);
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    }
+
+    $("textPreviewBtn").addEventListener("click", previewText);
+    $("textPrintBtn").addEventListener("click", async () => {
+      $("textPrintBtn").disabled = true;
+      setStatus("Printing");
+      try {
+        const body = await postJson("/api/text/print", { settings: textSettings() });
+        setStatus(body.message);
+      } catch (error) {
+        setStatus(error.message, true);
+      } finally {
+        $("textPrintBtn").disabled = false;
+      }
+    });
+
+    // === Shared ======================================================
+    function setStatus(text, isError) {
+      $("status").textContent = text;
+      $("status").className = isError ? "status error" : "status";
+    }
+
+    function showPages(pages, index) {
+      pdfPages = pages || [];
+      pdfIndex = Math.max(0, Math.min(pdfPages.length - 1, index || 0));
+      if (pdfPages.length === 0) {
+        $("paper").innerHTML = '<div class="empty">Nothing to preview</div>';
+        $("pageIndicator").textContent = "";
+        $("prevPage").disabled = true;
+        $("nextPage").disabled = true;
+        $("previewMeta").textContent = "384 px print width";
+        return;
+      }
+      const page = pdfPages[pdfIndex];
+      $("paper").innerHTML = `<div class="paper-text"><img alt="Page ${pdfIndex + 1}" src="${page.preview}"></div>`;
+      $("previewMeta").textContent = `${page.width} x ${page.height} px / ${page.lengthMm} mm`;
+      $("pageIndicator").textContent = pdfPages.length > 1
+        ? `Page ${pdfIndex + 1} of ${pdfPages.length}`
+        : "";
+      $("prevPage").disabled = pdfIndex <= 0;
+      $("nextPage").disabled = pdfIndex >= pdfPages.length - 1;
+    }
+
+    $("prevPage").addEventListener("click", () => showPages(pdfPages, pdfIndex - 1));
+    $("nextPage").addEventListener("click", () => showPages(pdfPages, pdfIndex + 1));
+
+    async function postJson(path, payload) {
       const response = await fetch(path, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image: imageData, settings: settings() })
+        body: JSON.stringify(payload),
       });
       const body = await response.json();
       if (!response.ok) throw new Error(body.error || "Request failed");
       return body;
     }
 
-    async function preview() {
-      if (!imageData) return;
-      el.status.textContent = "Rendering";
-      el.status.className = "status";
-      try {
-        const body = await request("/api/preview");
-        el.paper.innerHTML = `<img alt="Print preview" src="${body.preview}">`;
-        el.previewMeta.textContent = `${body.width} x ${body.height} px / ${body.lengthMm} mm`;
-        el.addrMeta.textContent = body.raster || body.addr;
-        el.status.textContent = body.warning || "Ready";
-        el.status.className = body.warning ? "status error" : "status";
-      } catch (error) {
-        el.status.textContent = error.message;
-        el.status.className = "status error";
-      }
-    }
-
-    async function printImage() {
-      if (!imageData) return;
-      el.printBtn.disabled = true;
-      el.status.textContent = "Printing";
-      el.status.className = "status";
-      try {
-        const body = await request("/api/print");
-        el.status.textContent = body.message;
-      } catch (error) {
-        el.status.textContent = error.message;
-        el.status.className = "status error";
-      } finally {
-        el.printBtn.disabled = false;
-      }
-    }
+    setTab("image");
   </script>
 </body>
 </html>
@@ -763,7 +1287,7 @@ def settings_from_payload(server: "DashboardServer", payload: dict[str, Any]) ->
         quality=3,
         threshold=int(opts.get("threshold", 180)),
         feed_lines=int(opts.get("feedLines", 60)),
-        scale="fit-width",
+        scale=str(opts.get("fit", "fit-width")) if "fit" in opts else "fit-width",
         dither=str(opts.get("dither", "floyd-steinberg")),
         dither_strength=float(opts.get("ditherStrength", 1.0)),
         ordered_size=4 if int(opts.get("orderedSize", 8)) <= 4 else 8,
@@ -774,6 +1298,7 @@ def settings_from_payload(server: "DashboardServer", payload: dict[str, Any]) ->
         invert=bool(opts.get("invert", False)),
         orientation=str(opts.get("orientation", "auto")),
         trim=bool(opts.get("trim", True)),
+        dpi=int(opts.get("dpi", 203)),
     )
     return core.Settings(**{key: value for key, value in kwargs.items() if key in CORE_FIELDS})
 
@@ -851,6 +1376,121 @@ def render_dashboard_image(image: Image.Image, settings: Any, opts: dict[str, An
     return core.prepare_image(canvas, settings)
 
 
+def decode_data_url(value: str) -> bytes:
+    if "," in value:
+        value = value.split(",", 1)[1]
+    return base64.b64decode(value)
+
+
+def load_image_data_url(value: str) -> Image.Image:
+    return Image.open(io.BytesIO(decode_data_url(value)))
+
+
+def render_pdf_pages(pdf_bytes: bytes, opts: dict[str, Any]) -> list[Image.Image]:
+    if not pdf_bytes.startswith(b"%PDF"):
+        raise ValueError("file is not a PDF")
+
+    from_page = max(1, int(opts.get("from", 1)))
+    to_page = max(from_page, int(opts.get("to", 9999)))
+    dpi = int(opts.get("dpi", 203))
+
+    settings = core.Settings(dpi=dpi)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        workdir = Path(tmp)
+        source = workdir / "job.pdf"
+        source.write_bytes(pdf_bytes)
+        pages = core.render_pdf_or_ps(source, settings, workdir)
+
+    if from_page > 1 or to_page < len(pages):
+        pages = pages[from_page - 1:to_page]
+    return pages
+
+
+def page_payload(image: Image.Image, settings: Any) -> dict[str, Any]:
+    return {
+        "preview": png_data_url(image),
+        "width": image.width,
+        "height": image.height,
+        "lengthMm": round(image.height / settings.dpi * 25.4, 1),
+    }
+
+
+def render_markdown_text(source: str, opts: dict[str, Any]) -> list[Image.Image]:
+    md_opts = core.MarkdownOptions(
+        font_size=int(opts.get("fontSize", 32)),
+        align=str(opts.get("align", "left")),
+        margin_x=int(opts.get("marginX", 8)),
+        margin_y=int(opts.get("marginY", 8)),
+        line_gap=int(opts.get("lineGap", 2)),
+        paragraph_gap=int(opts.get("paragraphGap", 6)),
+        list_indent=int(opts.get("listIndent", 12)),
+        code_padding_x=int(opts.get("codePaddingX", 8)),
+        code_padding_y=int(opts.get("codePaddingY", 6)),
+        heading_h1_delta=int(opts.get("headingH1Delta", 14)),
+        heading_h2_delta=int(opts.get("headingH2Delta", 10)),
+        heading_h3_delta=int(opts.get("headingH3Delta", 6)),
+        heading_h4_delta=int(opts.get("headingH4Delta", 4)),
+        heading_h5_delta=int(opts.get("headingH5Delta", 2)),
+        heading_h6_delta=0,
+        content_width=int(opts.get("contentWidth", 0)),
+        wrap=bool(opts.get("wrap", True)),
+        hr_padding=int(opts.get("hrPadding", 8)),
+        compact=bool(opts.get("compact", False)),
+    )
+    raster_settings = core.Settings(
+        font_size=md_opts.font_size,
+        align=md_opts.align,
+        threshold=int(opts.get("threshold", 180)),
+        dither=str(opts.get("dither", "floyd-steinberg")),
+        invert=bool(opts.get("invert", False)),
+    )
+    image = core.render_markdown(source or " ", md_opts)
+    if hasattr(core, "apply_tone"):
+        image = core.apply_tone(image, raster_settings)
+    if hasattr(core, "binarize_image"):
+        image = core.binarize_image(image, raster_settings)
+    return [image]
+
+
+def render_pdf_for_preview(pdf_bytes: bytes, opts: dict[str, Any]) -> tuple[list[Image.Image], Any]:
+    raw_pages = render_pdf_pages(pdf_bytes, opts)
+    settings = settings_from_dashboard_opts(opts, raw_pages[0].width if raw_pages else 1)
+    prepared: list[Image.Image] = []
+    for page in raw_pages:
+        image = page
+        if settings.trim:
+            image = core.trim_whitespace(image)
+        image = core.orient_image(image, settings)
+        if settings.scale == "fit-width" and image.width != core.WIDTH_PX:
+            ratio = core.WIDTH_PX / image.width
+            height = max(1, int(image.height * ratio))
+            image = image.resize((core.WIDTH_PX, height), Image.Resampling.LANCZOS)
+        if hasattr(core, "apply_tone"):
+            image = core.apply_tone(image, settings)
+        if hasattr(core, "binarize_image"):
+            image = core.binarize_image(image, settings)
+        else:
+            image = core.prepare_image(image, settings)
+        prepared.append(image)
+    return prepared, settings
+
+
+def settings_from_dashboard_opts(opts: dict[str, Any], fallback_dpi: int) -> Any:
+    server = DashboardServer.__new__(DashboardServer)
+    return core.Settings(
+        addr=None,
+        dpi=int(opts.get("dpi", fallback_dpi or 203)),
+        dither=str(opts.get("dither", "floyd-steinberg")),
+        threshold=int(opts.get("threshold", 180)),
+        brightness=float(opts.get("brightness", 1.0)),
+        contrast=float(opts.get("contrast", 1.0)),
+        trim=bool(opts.get("trim", True)),
+        orientation=str(opts.get("orientation", "auto")),
+        scale=str(opts.get("fit", "fit-width")),
+    )
+
+
 class DashboardServer(ThreadingHTTPServer):
     def __init__(self, server_address, handler_class, printer_addr: str, channel: int):
         super().__init__(server_address, handler_class)
@@ -878,38 +1518,103 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         try:
             length = int(self.headers.get("Content-Length", "0"))
-            if length > 25 * 1024 * 1024:
-                raise ValueError("image is too large")
+            if length > 60 * 1024 * 1024:
+                raise ValueError("payload is too large")
             payload = json.loads(self.rfile.read(length))
-            opts = payload.get("settings") or {}
-            settings = settings_from_payload(self.server, payload)
-            image = image_from_data_url(payload["image"])
-            prepared = render_dashboard_image(image, settings, opts)
-
-            if self.path == "/api/preview":
-                json_response(self, 200, {
-                    "preview": png_data_url(prepared),
-                    "width": prepared.width,
-                    "height": prepared.height,
-                    "lengthMm": round(prepared.height / settings.dpi * 25.4, 1),
-                    "addr": settings.addr,
-                    "raster": raster_summary(settings),
-                    "warning": core_warning(),
-                })
-                return
-
-            if self.path == "/api/print":
-                core.print_prepared_images([prepared], settings)
-                json_response(self, 200, {
-                    "message": "Printed",
-                    "width": prepared.width,
-                    "height": prepared.height,
-                })
-                return
-
-            self.send_error(404)
+            self.dispatch(payload)
         except Exception as exc:
             json_response(self, 400, {"error": str(exc)})
+
+    def dispatch(self, payload: dict[str, Any]) -> None:
+        opts = payload.get("settings") or {}
+        warning = core_warning()
+        if self.path == "/api/image/preview":
+            settings = settings_from_payload(self.server, payload)
+            image = load_image_data_url(payload["image"])
+            prepared = render_dashboard_image(image, settings, opts)
+            json_response(self, 200, {
+                "pages": [page_payload(prepared, settings)],
+                "raster": raster_summary(settings),
+                "warning": warning,
+            })
+            return
+        if self.path == "/api/image/print":
+            settings = settings_from_payload(self.server, payload)
+            image = load_image_data_url(payload["image"])
+            prepared = render_dashboard_image(image, settings, opts)
+            core.print_prepared_images([prepared], settings)
+            json_response(self, 200, {
+                "message": f"Printed {prepared.width} x {prepared.height} px",
+            })
+            return
+        if self.path == "/api/pdf/preview":
+            pdf_bytes = decode_data_url(payload["pdf"])
+            prepared, settings = render_pdf_for_preview(pdf_bytes, opts)
+            json_response(self, 200, {
+                "pages": [page_payload(image, settings) for image in prepared],
+                "raster": raster_summary(settings),
+                "warning": warning,
+            })
+            return
+        if self.path == "/api/pdf/print":
+            pdf_bytes = decode_data_url(payload["pdf"])
+            prepared, settings = render_pdf_for_preview(pdf_bytes, opts)
+            full_settings = core.Settings(
+                addr=self.server.printer_addr,
+                channel=self.server.channel,
+                darkness=int(opts.get("darkness", 9500)),
+                speed=int(opts.get("speed", 10)),
+                quality=3,
+                threshold=settings.threshold,
+                feed_lines=int(opts.get("feedLines", 60)),
+                dither=settings.dither,
+                dpi=settings.dpi,
+                orientation=settings.orientation,
+                trim=settings.trim,
+            )
+            core.print_prepared_images(prepared, full_settings)
+            json_response(self, 200, {
+                "message": f"Printed {len(prepared)} page{'s' if len(prepared) != 1 else ''}",
+            })
+            return
+        if self.path == "/api/text/preview":
+            source = str(opts.get("source", ""))
+            images = render_markdown_text(source, opts)
+            settings = core.Settings(
+                font_size=int(opts.get("fontSize", 32)),
+                align=str(opts.get("align", "left")),
+                dither=str(opts.get("dither", "floyd-steinberg")),
+                threshold=int(opts.get("threshold", 180)),
+                invert=bool(opts.get("invert", False)),
+            )
+            json_response(self, 200, {
+                "pages": [page_payload(image, settings) for image in images],
+                "raster": raster_summary(settings),
+                "warning": warning,
+            })
+            return
+        if self.path == "/api/text/print":
+            source = str(opts.get("source", ""))
+            images = render_markdown_text(source, opts)
+            settings = core.Settings(
+                addr=self.server.printer_addr,
+                channel=self.server.channel,
+                darkness=int(opts.get("darkness", 9500)),
+                speed=int(opts.get("speed", 10)),
+                quality=3,
+                font_size=int(opts.get("fontSize", 32)),
+                align=str(opts.get("align", "left")),
+                feed_lines=int(opts.get("feedLines", 60)),
+                dither=str(opts.get("dither", "floyd-steinberg")),
+                threshold=int(opts.get("threshold", 180)),
+                invert=bool(opts.get("invert", False)),
+            )
+            core.print_prepared_images(images, settings)
+            json_response(self, 200, {
+                "message": f"Printed {images[0].width} x {images[0].height} px",
+            })
+            return
+        self.send_error(404)
 
 
 def main() -> int:
