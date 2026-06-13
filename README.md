@@ -105,9 +105,9 @@ http://127.0.0.1:8765
 ```
 
 The dashboard prints directly over RFCOMM and does not use CUPS page sizes. It
-has fixed-label and auto-length modes, live bitmap preview, edge cropping,
-margin trimming, orientation control, tone controls, darkness/speed/feed
-controls, and raster methods:
+has file upload and clipboard paste, fixed-label and auto-length modes, live
+bitmap preview, edge cropping, margin trimming, orientation control, tone
+controls, darkness/speed/feed controls, and raster methods:
 
 - No dither (threshold)
 - Threshold only
