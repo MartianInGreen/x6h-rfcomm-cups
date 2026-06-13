@@ -103,8 +103,8 @@ sudo systemctl restart cups
 sudo lpadmin -p X6h-2CB7 -E \
   -v 'x6h-rfcomm://B7-2C-83-E6-F8-3E?channel=1' \
   -P cups/x6h-rfcomm.ppd \
-  -o media=Roll58x150 \
-  -o PageSize=Roll58x150
+  -o media=Roll58x50 \
+  -o PageSize=Roll58x50
 ```
 
 Test it:
@@ -118,6 +118,11 @@ echo "Hello from CUPS" | lp -d X6h-2CB7
 
 The included PPD exposes these receipt paper sizes in print dialogs:
 
+- `58 mm x 20 mm tiny label`
+- `58 mm x 30 mm tiny label`
+- `58 mm x 40 mm short label`
+- `58 mm x 50 mm short label`
+- `58 mm x 60 mm short receipt`
 - `58 mm x 75 mm receipt`
 - `58 mm x 100 mm receipt`
 - `58 mm x 150 mm receipt`
@@ -128,7 +133,7 @@ The included PPD exposes these receipt paper sizes in print dialogs:
 From the command line, select them with `media` or `PageSize`:
 
 ```bash
-lp -d X6h-2CB7 -o media=Roll58x200 README.md
+lp -d X6h-2CB7 -o media=Roll58x50 README.md
 ```
 
 Pass options with `lp -o`:

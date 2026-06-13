@@ -70,8 +70,8 @@ sudo lpadmin \
   -v "$uri" \
   -P "$ppd_path" \
   -o printer-is-shared=false \
-  -o media=Roll58x150 \
-  -o PageSize=Roll58x150
+  -o media=Roll58x50 \
+  -o PageSize=Roll58x50
 sudo lpoptions -d "$printer_name"
 
 cat <<EOF

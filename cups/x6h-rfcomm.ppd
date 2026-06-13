@@ -1,6 +1,6 @@
 *PPD-Adobe: "4.3"
 *FormatVersion: "4.3"
-*FileVersion: "0.2"
+*FileVersion: "0.3"
 *LanguageVersion: English
 *LanguageEncoding: ISOLatin1
 *PCFileName: "X6HRFCOM.PPD"
@@ -28,7 +28,7 @@
 *NonUIOrderDependency: 100 AnySetup *CustomPageSize
 *CustomPageSize True: "pop pop pop <</PageSize [5 -2 roll] /ImagingBBox null>>setpagedevice"
 *ParamCustomPageSize Width: 1 points 136 164
-*ParamCustomPageSize Height: 2 points 72 2835
+*ParamCustomPageSize Height: 2 points 36 2835
 *ParamCustomPageSize Orientation: 3 int 0 3
 *ParamCustomPageSize WidthOffset: 4 points 0 0
 *ParamCustomPageSize HeightOffset: 5 points 0 0
@@ -37,7 +37,12 @@
 
 *OpenUI *PageSize/Page Size: PickOne
 *OrderDependency: 100 AnySetup *PageSize
-*DefaultPageSize: Roll58x150
+*DefaultPageSize: Roll58x50
+*PageSize Roll58x20/58 mm x 20 mm tiny label: "<</PageSize[164 57]/ImagingBBox null>>setpagedevice"
+*PageSize Roll58x30/58 mm x 30 mm tiny label: "<</PageSize[164 85]/ImagingBBox null>>setpagedevice"
+*PageSize Roll58x40/58 mm x 40 mm short label: "<</PageSize[164 113]/ImagingBBox null>>setpagedevice"
+*PageSize Roll58x50/58 mm x 50 mm short label: "<</PageSize[164 142]/ImagingBBox null>>setpagedevice"
+*PageSize Roll58x60/58 mm x 60 mm short receipt: "<</PageSize[164 170]/ImagingBBox null>>setpagedevice"
 *PageSize Roll58x75/58 mm x 75 mm receipt: "<</PageSize[164 213]/ImagingBBox null>>setpagedevice"
 *PageSize Roll58x100/58 mm x 100 mm receipt: "<</PageSize[164 283]/ImagingBBox null>>setpagedevice"
 *PageSize Roll58x150/58 mm x 150 mm receipt: "<</PageSize[164 425]/ImagingBBox null>>setpagedevice"
@@ -48,7 +53,12 @@
 
 *OpenUI *PageRegion/Page Region: PickOne
 *OrderDependency: 100 AnySetup *PageRegion
-*DefaultPageRegion: Roll58x150
+*DefaultPageRegion: Roll58x50
+*PageRegion Roll58x20/58 mm x 20 mm tiny label: "<</PageSize[164 57]/ImagingBBox null>>setpagedevice"
+*PageRegion Roll58x30/58 mm x 30 mm tiny label: "<</PageSize[164 85]/ImagingBBox null>>setpagedevice"
+*PageRegion Roll58x40/58 mm x 40 mm short label: "<</PageSize[164 113]/ImagingBBox null>>setpagedevice"
+*PageRegion Roll58x50/58 mm x 50 mm short label: "<</PageSize[164 142]/ImagingBBox null>>setpagedevice"
+*PageRegion Roll58x60/58 mm x 60 mm short receipt: "<</PageSize[164 170]/ImagingBBox null>>setpagedevice"
 *PageRegion Roll58x75/58 mm x 75 mm receipt: "<</PageSize[164 213]/ImagingBBox null>>setpagedevice"
 *PageRegion Roll58x100/58 mm x 100 mm receipt: "<</PageSize[164 283]/ImagingBBox null>>setpagedevice"
 *PageRegion Roll58x150/58 mm x 150 mm receipt: "<</PageSize[164 425]/ImagingBBox null>>setpagedevice"
@@ -57,7 +67,12 @@
 *PageRegion Roll58x500/58 mm x 500 mm long receipt: "<</PageSize[164 1417]/ImagingBBox null>>setpagedevice"
 *CloseUI: *PageRegion
 
-*DefaultImageableArea: Roll58x150
+*DefaultImageableArea: Roll58x50
+*ImageableArea Roll58x20/58 mm x 20 mm tiny label: "0 0 164 57"
+*ImageableArea Roll58x30/58 mm x 30 mm tiny label: "0 0 164 85"
+*ImageableArea Roll58x40/58 mm x 40 mm short label: "0 0 164 113"
+*ImageableArea Roll58x50/58 mm x 50 mm short label: "0 0 164 142"
+*ImageableArea Roll58x60/58 mm x 60 mm short receipt: "0 0 164 170"
 *ImageableArea Roll58x75/58 mm x 75 mm receipt: "0 0 164 213"
 *ImageableArea Roll58x100/58 mm x 100 mm receipt: "0 0 164 283"
 *ImageableArea Roll58x150/58 mm x 150 mm receipt: "0 0 164 425"
@@ -65,7 +80,12 @@
 *ImageableArea Roll58x297/58 mm x 297 mm long receipt: "0 0 164 842"
 *ImageableArea Roll58x500/58 mm x 500 mm long receipt: "0 0 164 1417"
 
-*DefaultPaperDimension: Roll58x150
+*DefaultPaperDimension: Roll58x50
+*PaperDimension Roll58x20/58 mm x 20 mm tiny label: "164 57"
+*PaperDimension Roll58x30/58 mm x 30 mm tiny label: "164 85"
+*PaperDimension Roll58x40/58 mm x 40 mm short label: "164 113"
+*PaperDimension Roll58x50/58 mm x 50 mm short label: "164 142"
+*PaperDimension Roll58x60/58 mm x 60 mm short receipt: "164 170"
 *PaperDimension Roll58x75/58 mm x 75 mm receipt: "164 213"
 *PaperDimension Roll58x100/58 mm x 100 mm receipt: "164 283"
 *PaperDimension Roll58x150/58 mm x 150 mm receipt: "164 425"
