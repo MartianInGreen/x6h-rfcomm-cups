@@ -1,0 +1,394 @@
+#!/usr/bin/env python3
+"""Print to X6H-style Bluetooth thermal printers over RFCOMM/SPP.
+
+The executable works in two modes:
+
+* CLI mode:
+    x6h-rfcomm-print --addr B7:2C:83:E6:F8:3E "Hello"
+    x6h-rfcomm-print --addr B7:2C:83:E6:F8:3E --file receipt.pdf
+
+* CUPS backend mode:
+    install this file as /usr/lib/cups/backend/x6h-rfcomm and create a raw
+    queue with a URI like x6h-rfcomm://B7-2C-83-E6-F8-3E?channel=1
+"""
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import shlex
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+from dataclasses import dataclass, replace
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
+
+from PIL import Image, ImageDraw, ImageFont, ImageOps, UnidentifiedImageError
+
+WIDTH_BYTES = 48
+WIDTH_PX = WIDTH_BYTES * 8
+
+CRC8_TABLE = [
+    0x00, 0x07, 0x0E, 0x09, 0x1C, 0x1B, 0x12, 0x15, 0x38, 0x3F, 0x36, 0x31, 0x24, 0x23, 0x2A, 0x2D,
+    0x70, 0x77, 0x7E, 0x79, 0x6C, 0x6B, 0x62, 0x65, 0x48, 0x4F, 0x46, 0x41, 0x54, 0x53, 0x5A, 0x5D,
+    0xE0, 0xE7, 0xEE, 0xE9, 0xFC, 0xFB, 0xF2, 0xF5, 0xD8, 0xDF, 0xD6, 0xD1, 0xC4, 0xC3, 0xCA, 0xCD,
+    0x90, 0x97, 0x9E, 0x99, 0x8C, 0x8B, 0x82, 0x85, 0xA8, 0xAF, 0xA6, 0xA1, 0xB4, 0xB3, 0xBA, 0xBD,
+    0xC7, 0xC0, 0xC9, 0xCE, 0xDB, 0xDC, 0xD5, 0xD2, 0xFF, 0xF8, 0xF1, 0xF6, 0xE3, 0xE4, 0xED, 0xEA,
+    0xB7, 0xB0, 0xB9, 0xBE, 0xAB, 0xAC, 0xA5, 0xA2, 0x8F, 0x88, 0x81, 0x86, 0x93, 0x94, 0x9D, 0x9A,
+    0x27, 0x20, 0x29, 0x2E, 0x3B, 0x3C, 0x35, 0x32, 0x1F, 0x18, 0x11, 0x16, 0x03, 0x04, 0x0D, 0x0A,
+    0x57, 0x50, 0x59, 0x5E, 0x4B, 0x4C, 0x45, 0x42, 0x6F, 0x68, 0x61, 0x66, 0x73, 0x74, 0x7D, 0x7A,
+    0x89, 0x8E, 0x87, 0x80, 0x95, 0x92, 0x9B, 0x9C, 0xB1, 0xB6, 0xBF, 0xB8, 0xAD, 0xAA, 0xA3, 0xA4,
+    0xF9, 0xFE, 0xF7, 0xF0, 0xE5, 0xE2, 0xEB, 0xEC, 0xC1, 0xC6, 0xCF, 0xC8, 0xDD, 0xDA, 0xD3, 0xD4,
+    0x69, 0x6E, 0x67, 0x60, 0x75, 0x72, 0x7B, 0x7C, 0x51, 0x56, 0x5F, 0x58, 0x4D, 0x4A, 0x43, 0x44,
+    0x19, 0x1E, 0x17, 0x10, 0x05, 0x02, 0x0B, 0x0C, 0x21, 0x26, 0x2F, 0x28, 0x3D, 0x3A, 0x33, 0x34,
+    0x4E, 0x49, 0x40, 0x47, 0x52, 0x55, 0x5C, 0x5B, 0x76, 0x71, 0x78, 0x7F, 0x6A, 0x6D, 0x64, 0x63,
+    0x3E, 0x39, 0x30, 0x37, 0x22, 0x25, 0x2C, 0x2B, 0x06, 0x01, 0x08, 0x0F, 0x1A, 0x1D, 0x14, 0x13,
+    0xAE, 0xA9, 0xA0, 0xA7, 0xB2, 0xB5, 0xBC, 0xBB, 0x96, 0x91, 0x98, 0x9F, 0x8A, 0x8D, 0x84, 0x83,
+    0xDE, 0xD9, 0xD0, 0xD7, 0xC2, 0xC5, 0xCC, 0xCB, 0xE6, 0xE1, 0xE8, 0xEF, 0xFA, 0xFD, 0xF4, 0xF3,
+]
+
+
+@dataclass(frozen=True)
+class Settings:
+    addr: str | None = None
+    channel: int = 1
+    darkness: int = 9500
+    speed: int = 10
+    quality: int = 3
+    threshold: int = 180
+    font_size: int = 32
+    feed_lines: int = 80
+    align: str = "left"
+    scale: str = "fit-width"
+    dpi: int = 203
+    line_delay: float = 0.008
+
+
+def cups_log(level: str, message: str) -> None:
+    print(f"{level}: {message}", file=sys.stderr)
+
+
+def crc8(data: bytes) -> int:
+    crc = 0
+    for byte in data:
+        crc = CRC8_TABLE[(crc ^ byte) & 0xFF]
+    return crc & 0xFF
+
+
+def frame(command: int, payload: bytes = b"") -> bytes:
+    if len(payload) > 0xFFFF:
+        raise ValueError("payload too large")
+    return (
+        bytes([0x51, 0x78, command & 0xFF, 0x00])
+        + len(payload).to_bytes(2, "little")
+        + payload
+        + bytes([crc8(payload), 0xFF])
+    )
+
+
+def parse_bool(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def parse_device_uri(uri: str, settings: Settings) -> Settings:
+    if not uri:
+        return settings
+
+    parsed = urlparse(uri)
+    query = {k: v[-1] for k, v in parse_qs(parsed.query).items() if v}
+    raw_addr = parsed.netloc or parsed.path.lstrip("/")
+    raw_addr = raw_addr.split("/")[0]
+    if raw_addr:
+        raw_addr = raw_addr.replace("-", ":").upper()
+        if re.fullmatch(r"[0-9A-F]{2}(:[0-9A-F]{2}){5}", raw_addr):
+            settings = replace(settings, addr=raw_addr)
+
+    for key, value in query.items():
+        settings = apply_option(settings, key, value)
+    return settings
+
+
+def apply_option(settings: Settings, key: str, value: str) -> Settings:
+    normalized = key.lower().replace("_", "-")
+    if normalized.startswith("x6h-"):
+        normalized = normalized[4:]
+
+    if normalized in {"addr", "address"}:
+        return replace(settings, addr=value.replace("-", ":").upper())
+    if normalized == "channel":
+        return replace(settings, channel=int(value))
+    if normalized in {"darkness", "energy"}:
+        return replace(settings, darkness=int(value))
+    if normalized == "speed":
+        return replace(settings, speed=int(value))
+    if normalized == "quality":
+        return replace(settings, quality=int(value))
+    if normalized == "threshold":
+        return replace(settings, threshold=int(value))
+    if normalized in {"font-size", "fontsize"}:
+        return replace(settings, font_size=int(value))
+    if normalized in {"feed-lines", "feed"}:
+        return replace(settings, feed_lines=int(value))
+    if normalized == "align" and value in {"left", "center", "right"}:
+        return replace(settings, align=value)
+    if normalized == "scale" and value in {"fit-width", "native"}:
+        return replace(settings, scale=value)
+    if normalized == "dpi":
+        return replace(settings, dpi=int(value))
+    if normalized == "line-delay":
+        return replace(settings, line_delay=float(value))
+    if normalized == "fit-width":
+        return replace(settings, scale="fit-width" if parse_bool(value) else "native")
+    return settings
+
+
+def parse_cups_options(options: str, settings: Settings) -> Settings:
+    for token in shlex.split(options or ""):
+        if "=" in token:
+            key, value = token.split("=", 1)
+            settings = apply_option(settings, key, value)
+    return settings
+
+
+def find_font(size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    for path in (
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf",
+    ):
+        if os.path.exists(path):
+            return ImageFont.truetype(path, size)
+    return ImageFont.load_default()
+
+
+def wrap_text(text: str, draw: ImageDraw.ImageDraw, font: ImageFont.ImageFont, max_width: int) -> list[str]:
+    lines: list[str] = []
+    for raw_line in text.splitlines() or [""]:
+        words = raw_line.split()
+        if not words:
+            lines.append("")
+            continue
+        current = words[0]
+        for word in words[1:]:
+            candidate = f"{current} {word}"
+            if draw.textbbox((0, 0), candidate, font=font)[2] <= max_width:
+                current = candidate
+            else:
+                lines.append(current)
+                current = word
+        lines.append(current)
+    return lines
+
+
+def render_text(text: str, settings: Settings) -> Image.Image:
+    font = find_font(settings.font_size)
+    probe = Image.new("L", (1, 1), 255)
+    draw = ImageDraw.Draw(probe)
+    margin = 8
+    lines = wrap_text(text, draw, font, WIDTH_PX - margin * 2)
+    bboxes = [draw.textbbox((0, 0), line or " ", font=font) for line in lines]
+    line_heights = [max(1, box[3] - box[1]) for box in bboxes]
+    height = sum(line_heights) + (len(lines) - 1) * 8 + margin * 2
+    image = Image.new("L", (WIDTH_PX, height), 255)
+    draw = ImageDraw.Draw(image)
+    y = margin
+    for line, box, line_height in zip(lines, bboxes, line_heights):
+        width = box[2] - box[0]
+        if settings.align == "center":
+            x = max(margin, (WIDTH_PX - width) // 2)
+        elif settings.align == "right":
+            x = max(margin, WIDTH_PX - width - margin)
+        else:
+            x = margin
+        draw.text((x - box[0], y - box[1]), line, fill=0, font=font)
+        y += line_height + 8
+    return image
+
+
+def render_pdf_or_ps(path: Path, settings: Settings, workdir: Path) -> list[Image.Image]:
+    output_prefix = workdir / "page"
+    if path.read_bytes().startswith(b"%PDF"):
+        command = ["pdftoppm", "-png", "-r", str(settings.dpi), str(path), str(output_prefix)]
+    else:
+        command = [
+            "gs",
+            "-dSAFER",
+            "-dBATCH",
+            "-dNOPAUSE",
+            "-sDEVICE=pnggray",
+            "-r" + str(settings.dpi),
+            f"-sOutputFile={output_prefix}-%03d.png",
+            str(path),
+        ]
+    try:
+        subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except FileNotFoundError as exc:
+        tool = command[0]
+        raise RuntimeError(f"{tool} is required to print PDF/PostScript jobs") from exc
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(exc.stderr.decode(errors="replace").strip() or "document conversion failed") from exc
+
+    pages = sorted(workdir.glob("page*.png"))
+    if not pages:
+        raise RuntimeError("document conversion produced no pages")
+    return [Image.open(page).convert("L") for page in pages]
+
+
+def image_from_bytes(data: bytes, settings: Settings) -> list[Image.Image]:
+    if data.startswith(b"%PDF") or data.startswith(b"%!PS"):
+        with tempfile.TemporaryDirectory() as tmp:
+            workdir = Path(tmp)
+            source = workdir / ("job.pdf" if data.startswith(b"%PDF") else "job.ps")
+            source.write_bytes(data)
+            return render_pdf_or_ps(source, settings, workdir)
+
+    try:
+        with tempfile.NamedTemporaryFile(suffix=".input") as handle:
+            handle.write(data)
+            handle.flush()
+            return [Image.open(handle.name).convert("L")]
+    except UnidentifiedImageError:
+        text = data.decode("utf-8", errors="replace")
+        return [render_text(text, settings)]
+
+
+def prepare_image(image: Image.Image, settings: Settings) -> Image.Image:
+    image = image.convert("L")
+    image = ImageOps.exif_transpose(image)
+    if settings.scale == "fit-width" and image.width != WIDTH_PX:
+        ratio = WIDTH_PX / image.width
+        height = max(1, int(image.height * ratio))
+        image = image.resize((WIDTH_PX, height), Image.Resampling.LANCZOS)
+    elif image.width > WIDTH_PX:
+        image = image.crop((0, 0, WIDTH_PX, image.height))
+    elif image.width < WIDTH_PX:
+        canvas = Image.new("L", (WIDTH_PX, image.height), 255)
+        canvas.paste(image, (0, 0))
+        image = canvas
+
+    return image.point(lambda pixel: 0 if pixel < settings.threshold else 255, mode="1")
+
+
+def image_to_lines(image: Image.Image) -> list[bytes]:
+    bw = image.convert("1")
+    lines = []
+    for y in range(bw.height):
+        row = bytearray(WIDTH_BYTES)
+        for x in range(WIDTH_PX):
+            if bw.getpixel((x, y)) == 0:
+                row[x // 8] |= 1 << (x % 8)
+        lines.append(bytes(row))
+    return lines
+
+
+def send(sock: socket.socket, command: int, payload: bytes = b"") -> None:
+    sock.sendall(frame(command, payload))
+
+
+def print_images(images: list[Image.Image], settings: Settings, copies: int = 1) -> None:
+    if not settings.addr:
+        raise RuntimeError("printer address is required")
+
+    cups_log("INFO", f"Connecting to {settings.addr} channel {settings.channel}")
+    sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
+    sock.settimeout(30)
+    sock.connect((settings.addr, settings.channel))
+    try:
+        send(sock, 0xA4, bytes([settings.quality]))
+        send(sock, 0xAF, settings.darkness.to_bytes(2, "little"))
+        send(sock, 0xBD, bytes([settings.speed]))
+        send(sock, 0xBE, bytes([0]))
+        time.sleep(0.05)
+
+        blank = bytes(WIDTH_BYTES)
+        for _copy in range(copies):
+            for image in images:
+                for line in image_to_lines(prepare_image(image, settings)):
+                    send(sock, 0xA2, line)
+                    time.sleep(settings.line_delay)
+                for _ in range(settings.feed_lines):
+                    send(sock, 0xA2, blank)
+                    time.sleep(0.005)
+    finally:
+        sock.close()
+
+
+def discovery() -> int:
+    print('direct x6h-rfcomm "Unknown" "X6H RFCOMM thermal printer"')
+    return 0
+
+
+def run_cups_backend() -> int:
+    if len(sys.argv) == 1:
+        return discovery()
+    if len(sys.argv) not in {6, 7}:
+        cups_log("ERROR", "Usage: x6h-rfcomm job-id user title copies options [file]")
+        return 1
+
+    copies = int(sys.argv[4])
+    settings = Settings()
+    settings = parse_device_uri(os.environ.get("DEVICE_URI", ""), settings)
+    settings = parse_cups_options(sys.argv[5], settings)
+    if os.environ.get("X6H_ADDR"):
+        settings = replace(settings, addr=os.environ["X6H_ADDR"].replace("-", ":").upper())
+
+    data = Path(sys.argv[6]).read_bytes() if len(sys.argv) == 7 else sys.stdin.buffer.read()
+    images = image_from_bytes(data, settings)
+    print_images(images, settings, copies=max(1, copies))
+    return 0
+
+
+def run_cli() -> int:
+    parser = argparse.ArgumentParser(description="Print to an X6H RFCOMM thermal printer.")
+    parser.add_argument("text", nargs="*", help="Text to print when --file is not provided")
+    parser.add_argument("--file", "-f", type=Path, help="File to print: text, image, PDF, or PostScript")
+    parser.add_argument("--addr", default=os.environ.get("X6H_ADDR"), help="Bluetooth MAC address")
+    parser.add_argument("--channel", type=int, default=1)
+    parser.add_argument("--darkness", "--energy", type=int, default=9500)
+    parser.add_argument("--speed", type=int, default=10)
+    parser.add_argument("--quality", type=int, default=3)
+    parser.add_argument("--threshold", type=int, default=180)
+    parser.add_argument("--font-size", type=int, default=32)
+    parser.add_argument("--feed-lines", type=int, default=80)
+    parser.add_argument("--align", choices=["left", "center", "right"], default="left")
+    parser.add_argument("--scale", choices=["fit-width", "native"], default="fit-width")
+    args = parser.parse_args()
+
+    settings = Settings(
+        addr=args.addr.replace("-", ":").upper() if args.addr else None,
+        channel=args.channel,
+        darkness=args.darkness,
+        speed=args.speed,
+        quality=args.quality,
+        threshold=args.threshold,
+        font_size=args.font_size,
+        feed_lines=args.feed_lines,
+        align=args.align,
+        scale=args.scale,
+    )
+
+    if args.file:
+        data = args.file.read_bytes()
+    else:
+        data = (" ".join(args.text) or sys.stdin.read()).encode()
+    print_images(image_from_bytes(data, settings), settings)
+    return 0
+
+
+def main() -> int:
+    backend_name = Path(sys.argv[0]).name
+    try:
+        if backend_name == "x6h-rfcomm":
+            return run_cups_backend()
+        return run_cli()
+    except Exception as exc:
+        cups_log("ERROR", str(exc))
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
