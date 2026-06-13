@@ -1,6 +1,6 @@
 *PPD-Adobe: "4.3"
 *FormatVersion: "4.3"
-*FileVersion: "0.6"
+*FileVersion: "0.8"
 *LanguageVersion: English
 *LanguageEncoding: ISOLatin1
 *PCFileName: "X6HRFCOM.PPD"
@@ -120,9 +120,10 @@
 
 *OpenUI *Dither/Raster Method: PickOne
 *OrderDependency: 110 AnySetup *Dither
-*DefaultDither: None
-*Dither None/None: ""
-*Dither Threshold/Threshold: ""
+*DefaultDither: Grayscale
+*Dither Grayscale/Grayscale: ""
+*Dither None/No dither (threshold): ""
+*Dither Threshold/Threshold only: ""
 *Dither Floyd-Steinberg/Floyd-Steinberg: ""
 *Dither Ordered/Ordered dither: ""
 *Dither Atkinson/Atkinson: ""

@@ -421,8 +421,9 @@ HTML = r"""<!doctype html>
         <div class="group-title">Raster</div>
         <label>Dither
           <select id="dither">
-            <option value="none">None</option>
-            <option value="threshold">Threshold</option>
+            <option value="none">No dither (threshold)</option>
+            <option value="grayscale">Grayscale</option>
+            <option value="threshold">Threshold only</option>
             <option value="floyd-steinberg" selected>Floyd-Steinberg</option>
             <option value="ordered">Ordered</option>
             <option value="atkinson">Atkinson</option>
@@ -770,6 +771,10 @@ def raster_summary(settings: Any) -> str:
     dither = getattr(settings, "dither", "none")
     threshold = getattr(settings, "threshold", 180)
     strength = getattr(settings, "dither_strength", 1.0)
+    if dither in {"none", "threshold"}:
+        return f"no dither, threshold {threshold}"
+    if dither == "grayscale":
+        return "4-bit grayscale"
     return f"{dither}, threshold {threshold}, strength {strength}"
 
 

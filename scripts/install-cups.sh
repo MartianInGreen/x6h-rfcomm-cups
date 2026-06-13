@@ -21,6 +21,10 @@ backend_dir="$cups_serverbin/backend"
 backend_path="$backend_dir/x6h-rfcomm"
 cli_path="/usr/local/bin/x6h-rfcomm-print"
 dashboard_path="/usr/local/bin/x6h-rfcomm-dashboard"
+runtime_dir="/usr/local/lib/x6h-rfcomm-cups"
+venv_dir="$runtime_dir/venv"
+runtime_print="$runtime_dir/x6h-rfcomm-print"
+runtime_dashboard="$runtime_dir/x6h-rfcomm-dashboard"
 ppd_path="$repo_root/cups/x6h-rfcomm.ppd"
 
 if [[ ! -f "$ppd_path" ]]; then
@@ -28,35 +32,45 @@ if [[ ! -f "$ppd_path" ]]; then
   exit 1
 fi
 
-if ! python3 -s -c 'import PIL' >/dev/null 2>&1; then
-  echo "Installing Python dependency: Pillow"
-  if command -v pacman >/dev/null 2>&1; then
-    sudo pacman -S --needed python-pillow
-  elif command -v apt-get >/dev/null 2>&1; then
-    sudo apt-get update
-    sudo apt-get install -y python3-pil
-  elif command -v dnf >/dev/null 2>&1; then
-    sudo dnf install -y python3-pillow
-  elif command -v zypper >/dev/null 2>&1; then
-    sudo zypper install -y python3-Pillow
-  else
-    echo "Could not find a supported package manager." >&2
-    echo "Install Pillow for the system Python, then rerun this script." >&2
-    exit 1
-  fi
+runtime_python="$(command -v python3)"
+if python3 -s -c 'import PIL, lzo' >/dev/null 2>&1; then
+  echo "System Python dependencies already installed: Pillow and lzo"
 else
-  echo "Python dependency already installed: Pillow"
+  echo "Creating/updating private Python runtime: $venv_dir"
+  sudo install -d -m 0755 "$runtime_dir"
+  sudo python3 -m venv "$venv_dir"
+  sudo "$venv_dir/bin/python" -m pip install --upgrade pip
+  sudo "$venv_dir/bin/python" -m pip install -r "$repo_root/requirements.txt"
+  runtime_python="$venv_dir/bin/python"
 fi
 
-echo "Installing CLI: $cli_path"
-sudo install -m 0755 "$repo_root/bin/x6h-rfcomm-print" "$cli_path"
+echo "Installing runtime files: $runtime_dir"
+sudo install -d -m 0755 "$runtime_dir"
+sudo install -m 0755 "$repo_root/bin/x6h-rfcomm-print" "$runtime_print"
+sudo install -m 0755 "$repo_root/bin/x6h-rfcomm-dashboard" "$runtime_dashboard"
 
-echo "Installing dashboard: $dashboard_path"
-sudo install -m 0755 "$repo_root/bin/x6h-rfcomm-dashboard" "$dashboard_path"
+echo "Installing CLI wrapper: $cli_path"
+sudo tee "$cli_path" >/dev/null <<EOF
+#!/usr/bin/env bash
+exec "$runtime_python" "$runtime_print" "\$@"
+EOF
+sudo chmod 0755 "$cli_path"
 
-echo "Installing CUPS backend: $backend_path"
+echo "Installing dashboard wrapper: $dashboard_path"
+sudo tee "$dashboard_path" >/dev/null <<EOF
+#!/usr/bin/env bash
+exec "$runtime_python" "$runtime_dashboard" "\$@"
+EOF
+sudo chmod 0755 "$dashboard_path"
+
+echo "Installing CUPS backend wrapper: $backend_path"
 sudo install -d -m 0755 "$backend_dir"
-sudo install -m 0755 "$repo_root/bin/x6h-rfcomm-print" "$backend_path"
+sudo tee "$backend_path" >/dev/null <<EOF
+#!/usr/bin/env bash
+export X6H_CUPS_BACKEND=1
+exec "$runtime_python" "$runtime_print" "\$@"
+EOF
+sudo chmod 0755 "$backend_path"
 
 echo "Restarting CUPS"
 if command -v systemctl >/dev/null 2>&1; then

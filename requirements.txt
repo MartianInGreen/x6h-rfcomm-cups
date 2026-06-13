@@ -1,1 +1,2 @@
 Pillow>=10
+python-lzo>=1.15

@@ -9,11 +9,14 @@ fi
 
 addr="$1"
 port="${2:-8765}"
-repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 service_dir="$HOME/.config/systemd/user"
 service_path="$service_dir/x6h-rfcomm-dashboard.service"
 
-sudo install -m 0755 "$repo_root/bin/x6h-rfcomm-dashboard" /usr/local/bin/x6h-rfcomm-dashboard
+if ! command -v x6h-rfcomm-dashboard >/dev/null 2>&1; then
+  echo "x6h-rfcomm-dashboard is not installed." >&2
+  echo "Run ./install.sh first so the shared runtime and wrappers are installed." >&2
+  exit 1
+fi
 
 install -d -m 0755 "$service_dir"
 cat > "$service_path" <<EOF

@@ -33,7 +33,6 @@ RFCOMM/SPP. No `/dev/rfcomm0` binding is required.
 
 - Linux with BlueZ
 - Python 3
-- Pillow
 - CUPS, if you want printer integration
 - `pdftoppm` from Poppler for PDF jobs
 - Ghostscript for PostScript jobs
@@ -44,6 +43,11 @@ On Arch Linux:
 sudo pacman -S --needed cups bluez bluez-utils python-pillow poppler ghostscript
 sudo systemctl enable --now bluetooth cups
 ```
+
+The installer creates a private Python runtime under
+`/usr/local/lib/x6h-rfcomm-cups` when the system Python cannot import both
+Pillow and `lzo`. This is required for grayscale printing on distributions
+that do not package the Python LZO module.
 
 On Debian/Ubuntu:
 
@@ -105,8 +109,8 @@ has fixed-label and auto-length modes, live bitmap preview, edge cropping,
 margin trimming, orientation control, tone controls, darkness/speed/feed
 controls, and raster methods:
 
-- None
-- Threshold
+- No dither (threshold)
+- Threshold only
 - Floyd-Steinberg
 - Ordered dither
 - Atkinson
@@ -153,12 +157,12 @@ scripts/install-cups.sh B7:2C:83:E6:F8:3E X6h-2CB7
 
 The installer:
 
-1. Copies the CLI to `/usr/local/bin/x6h-rfcomm-print`.
-2. Copies the dashboard to `/usr/local/bin/x6h-rfcomm-dashboard`.
-3. Copies the same executable to the CUPS backend directory as `x6h-rfcomm`.
-4. Installs Pillow through the system package manager if it is missing.
-5. Restarts CUPS.
-6. Creates a PPD-backed queue named `X6h-2CB7`.
+1. Installs or updates the shared runtime in `/usr/local/lib/x6h-rfcomm-cups`.
+2. Creates wrappers for `/usr/local/bin/x6h-rfcomm-print` and
+   `/usr/local/bin/x6h-rfcomm-dashboard`.
+3. Creates a CUPS backend wrapper named `x6h-rfcomm`.
+4. Restarts CUPS.
+5. Creates a PPD-backed queue named `X6h-2CB7`.
 
 Manual equivalent:
 
@@ -220,8 +224,9 @@ Supported option names:
 - `x6h-speed`: default `10`
 - `x6h-quality`: default `3`
 - `x6h-threshold`: default `180`
-- `x6h-dither`: `None`, `Threshold`, `Floyd-Steinberg`, `Ordered`, or
-  `Atkinson`
+- `x6h-dither`: `None`/no dither, `Threshold`, `Floyd-Steinberg`, `Ordered`,
+  or `Atkinson`. The printer is 1-bit, so `None` still applies the selected
+  threshold cutoff; it only disables patterned/error-diffusion dithering.
 - `x6h-font-size`: default `32`
 - `x6h-feed-lines`: default `80`
 - `x6h-align`: `left`, `center`, or `right`

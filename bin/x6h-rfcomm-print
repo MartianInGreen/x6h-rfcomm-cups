@@ -28,6 +28,11 @@ from urllib.parse import parse_qs, urlparse
 
 from PIL import Image, ImageDraw, ImageEnhance, ImageFont, ImageOps, UnidentifiedImageError
 
+try:
+    import lzo
+except ImportError:
+    lzo = None
+
 WIDTH_BYTES = 48
 WIDTH_PX = WIDTH_BYTES * 8
 
@@ -154,7 +159,7 @@ def apply_option(settings: Settings, key: str, value: str) -> Settings:
         return replace(settings, align=value)
     if normalized == "scale" and value in {"fit-width", "native"}:
         return replace(settings, scale=value)
-    if normalized == "dither" and value_normalized in {"none", "threshold", "floyd-steinberg", "ordered", "atkinson"}:
+    if normalized == "dither" and value_normalized in {"grayscale", "none", "threshold", "floyd-steinberg", "ordered", "atkinson"}:
         return replace(settings, dither=value_normalized)
     if normalized in {"dither-strength", "ditherstrength"}:
         return replace(settings, dither_strength=max(0.0, min(1.5, float(value))))
@@ -433,6 +438,8 @@ def error_diffusion_dither(image: Image.Image, settings: Settings, algorithm: st
 
 def binarize_image(image: Image.Image, settings: Settings) -> Image.Image:
     image = image.convert("L")
+    if settings.dither == "grayscale":
+        return image
     if settings.dither == "floyd-steinberg":
         return error_diffusion_dither(image, settings, "floyd-steinberg")
     if settings.dither == "atkinson":
@@ -462,6 +469,43 @@ def send(sock: socket.socket, command: int, payload: bytes = b"") -> None:
     sock.sendall(frame(command, payload))
 
 
+def grayscale_print_commands(image: Image.Image, block_lines: int = 20) -> list[bytes]:
+    if lzo is None:
+        raise RuntimeError("python-lzo is required for grayscale printing")
+
+    image = image.convert("L")
+    if image.width != WIDTH_PX:
+        raise ValueError(f"grayscale image width must be {WIDTH_PX}px")
+
+    line_len = WIDTH_PX
+    block_len = line_len * block_lines
+    intensities = bytearray()
+    for pixel in image.getdata():
+        intensities.append(255 - pixel)
+
+    while len(intensities) % block_len != 0:
+        intensities.extend(bytes(line_len))
+
+    commands = []
+    for block_start in range(0, len(intensities), block_len):
+        block = bytes(intensities[block_start:block_start + block_len])
+        packed = bytearray()
+        for i in range(0, len(block), 2):
+            p0 = block[i] >> 4
+            p1 = block[i + 1] >> 4 if i + 1 < len(block) else 0
+            packed.append((p0 << 4) | p1)
+        compressed = lzo.compress(bytes(packed), 1, False)
+        payload = len(packed).to_bytes(2, "little") + len(compressed).to_bytes(2, "little") + compressed
+        commands.append(frame(0xCF, payload))
+    return commands
+
+
+def send_grayscale_image(sock: socket.socket, image: Image.Image, settings: Settings) -> None:
+    for command in grayscale_print_commands(image):
+        sock.sendall(command)
+        time.sleep(settings.line_delay)
+
+
 def print_prepared_images(images: list[Image.Image], settings: Settings, copies: int = 1) -> None:
     if not settings.addr:
         raise RuntimeError("printer address is required")
@@ -480,12 +524,16 @@ def print_prepared_images(images: list[Image.Image], settings: Settings, copies:
         blank = bytes(WIDTH_BYTES)
         for _copy in range(copies):
             for image in images:
-                for line in image_to_lines(image):
-                    send(sock, 0xA2, line)
-                    time.sleep(settings.line_delay)
-                for _ in range(settings.feed_lines):
-                    send(sock, 0xA2, blank)
-                    time.sleep(0.005)
+                if settings.dither == "grayscale":
+                    send_grayscale_image(sock, image, settings)
+                    send(sock, 0xA1, settings.feed_lines.to_bytes(2, "little"))
+                else:
+                    for line in image_to_lines(image):
+                        send(sock, 0xA2, line)
+                        time.sleep(settings.line_delay)
+                    for _ in range(settings.feed_lines):
+                        send(sock, 0xA2, blank)
+                        time.sleep(0.005)
     finally:
         sock.close()
 
@@ -533,7 +581,7 @@ def run_cli() -> int:
     parser.add_argument("--feed-lines", type=int, default=80)
     parser.add_argument("--align", choices=["left", "center", "right"], default="left")
     parser.add_argument("--scale", choices=["fit-width", "native"], default="fit-width")
-    parser.add_argument("--dither", choices=["none", "threshold", "floyd-steinberg", "ordered", "atkinson"], default="none")
+    parser.add_argument("--dither", choices=["grayscale", "none", "threshold", "floyd-steinberg", "ordered", "atkinson"], default="none")
     parser.add_argument("--dither-strength", type=float, default=1.0)
     parser.add_argument("--ordered-size", type=int, choices=[4, 8], default=8)
     parser.add_argument("--no-serpentine", action="store_true")
@@ -579,7 +627,7 @@ def run_cli() -> int:
 def main() -> int:
     backend_name = Path(sys.argv[0]).name
     try:
-        if backend_name == "x6h-rfcomm":
+        if backend_name == "x6h-rfcomm" or os.environ.get("X6H_CUPS_BACKEND") == "1":
             return run_cups_backend()
         return run_cli()
     except Exception as exc:
