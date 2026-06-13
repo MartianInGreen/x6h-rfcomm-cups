@@ -9,6 +9,10 @@ Tested with:
 - Bluetooth address `B7:2C:83:E6:F8:3E`
 - RFCOMM channel `1`
 
+## Dashboard
+<img width="1266" height="1781" alt="image" src="https://github.com/user-attachments/assets/ae16136b-41e0-490f-98fa-08a227c4eb50" />
+A simple interface to print images, pdfs, and text, with printer and conversion options. 
+
 ## What It Provides
 
 - `bin/x6h-rfcomm-print`: direct CLI printer script.
