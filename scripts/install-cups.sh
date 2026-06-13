@@ -20,6 +20,12 @@ fi
 backend_dir="$cups_serverbin/backend"
 backend_path="$backend_dir/x6h-rfcomm"
 cli_path="/usr/local/bin/x6h-rfcomm-print"
+ppd_path="$repo_root/cups/x6h-rfcomm.ppd"
+
+if [[ ! -f "$ppd_path" ]]; then
+  echo "Missing PPD: $ppd_path" >&2
+  exit 1
+fi
 
 if ! python3 -s -c 'import PIL' >/dev/null 2>&1; then
   echo "Installing Python dependency: Pillow"
@@ -57,8 +63,15 @@ fi
 
 uri="x6h-rfcomm://$addr?channel=1"
 
-echo "Creating raw CUPS queue: $printer_name -> $uri"
-sudo lpadmin -p "$printer_name" -E -v "$uri" -m raw -o printer-is-shared=false
+echo "Creating CUPS queue: $printer_name -> $uri"
+sudo lpadmin \
+  -p "$printer_name" \
+  -E \
+  -v "$uri" \
+  -P "$ppd_path" \
+  -o printer-is-shared=false \
+  -o media=Roll58x150 \
+  -o PageSize=Roll58x150
 sudo lpoptions -d "$printer_name"
 
 cat <<EOF

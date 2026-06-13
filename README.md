@@ -21,7 +21,8 @@ org.bluez.Error.BREDR.ProfileUnavailable
 - `bin/x6h-rfcomm-print`: direct CLI printer script.
 - CUPS backend mode: install the same executable as
   `/usr/lib/cups/backend/x6h-rfcomm`.
-- `scripts/install-cups.sh`: installs the backend and creates a raw CUPS queue.
+- `cups/x6h-rfcomm.ppd`: CUPS model with 58 mm receipt paper presets.
+- `scripts/install-cups.sh`: installs the backend and creates a CUPS queue.
 
 The printer uses 384-pixel-wide, 1-bit thermal bitmap lines sent over Bluetooth
 RFCOMM/SPP. No `/dev/rfcomm0` binding is required.
@@ -92,14 +93,18 @@ The installer:
 2. Copies the same executable to the CUPS backend directory as `x6h-rfcomm`.
 3. Installs Pillow through the system package manager if it is missing.
 4. Restarts CUPS.
-5. Creates a raw queue named `X6h-2CB7`.
+5. Creates a PPD-backed queue named `X6h-2CB7`.
 
 Manual equivalent:
 
 ```bash
 sudo install -m 0755 bin/x6h-rfcomm-print "$(cups-config --serverbin)/backend/x6h-rfcomm"
 sudo systemctl restart cups
-sudo lpadmin -p X6h-2CB7 -E -v 'x6h-rfcomm://B7-2C-83-E6-F8-3E?channel=1' -m raw
+sudo lpadmin -p X6h-2CB7 -E \
+  -v 'x6h-rfcomm://B7-2C-83-E6-F8-3E?channel=1' \
+  -P cups/x6h-rfcomm.ppd \
+  -o media=Roll58x150 \
+  -o PageSize=Roll58x150
 ```
 
 Test it:
@@ -110,6 +115,21 @@ echo "Hello from CUPS" | lp -d X6h-2CB7
 ```
 
 ## CUPS Print Options
+
+The included PPD exposes these receipt paper sizes in print dialogs:
+
+- `58 mm x 75 mm receipt`
+- `58 mm x 100 mm receipt`
+- `58 mm x 150 mm receipt`
+- `58 mm x 200 mm receipt`
+- `58 mm x 297 mm long receipt`
+- `58 mm x 500 mm long receipt`
+
+From the command line, select them with `media` or `PageSize`:
+
+```bash
+lp -d X6h-2CB7 -o media=Roll58x200 README.md
+```
 
 Pass options with `lp -o`:
 
@@ -135,6 +155,8 @@ Supported option names:
 - `x6h-align`: `left`, `center`, or `right`
 - `x6h-scale`: `fit-width` or `native`
 - `x6h-channel`: default `1`
+- PPD dialogs may show these as `Darkness`, `Speed`, `Threshold`, `FontSize`,
+  and `FeedLines`.
 
 You can also put stable settings in the device URI:
 
@@ -146,8 +168,9 @@ sudo lpadmin -p X6h-2CB7 -v 'x6h-rfcomm://B7-2C-83-E6-F8-3E?channel=1&darkness=1
 
 - The MAC address is written with dashes in the CUPS URI because colons are
   awkward in URI host parsing. The backend converts dashes back to colons.
-- The CUPS queue is raw on purpose. The backend accepts text, common image
-  formats, PDF, and PostScript directly.
+- The CUPS queue uses a small PPD so desktop print dialogs show 58 mm receipt
+  paper sizes. The backend accepts text, common image formats, PDF, and
+  PostScript directly.
 - PDF support requires `pdftoppm`; PostScript support requires `gs`.
 - If another phone app is connected to the printer, disconnect it before
   printing from Linux.

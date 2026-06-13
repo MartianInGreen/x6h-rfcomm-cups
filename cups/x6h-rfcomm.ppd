@@ -1,0 +1,122 @@
+*PPD-Adobe: "4.3"
+*FormatVersion: "4.3"
+*FileVersion: "0.2"
+*LanguageVersion: English
+*LanguageEncoding: ISOLatin1
+*PCFileName: "X6HRFCOM.PPD"
+*Manufacturer: "X6H"
+*Product: "(X6H RFCOMM Thermal Printer)"
+*ModelName: "X6H RFCOMM Thermal Printer"
+*ShortNickName: "X6H RFCOMM"
+*NickName: "X6H RFCOMM 58mm Thermal Printer"
+*1284DeviceID: "MFG:X6H;MDL:RFCOMM Thermal Printer;DES:X6H RFCOMM 58mm Thermal Printer;CLS:PRINTER;"
+*PSVersion: "(3010.000) 0"
+*LanguageLevel: "3"
+*ColorDevice: False
+*DefaultColorSpace: Gray
+*FileSystem: False
+*Throughput: "1"
+*LandscapeOrientation: Plus90
+*TTRasterizer: Type42
+
+*cupsManualCopies: True
+
+*HWMargins: 0 0 0 0
+*VariablePaperSize: True
+*MaxMediaWidth: "164"
+*MaxMediaHeight: "2835"
+*NonUIOrderDependency: 100 AnySetup *CustomPageSize
+*CustomPageSize True: "pop pop pop <</PageSize [5 -2 roll] /ImagingBBox null>>setpagedevice"
+*ParamCustomPageSize Width: 1 points 136 164
+*ParamCustomPageSize Height: 2 points 72 2835
+*ParamCustomPageSize Orientation: 3 int 0 3
+*ParamCustomPageSize WidthOffset: 4 points 0 0
+*ParamCustomPageSize HeightOffset: 5 points 0 0
+
+*OpenGroup: General/General
+
+*OpenUI *PageSize/Page Size: PickOne
+*OrderDependency: 100 AnySetup *PageSize
+*DefaultPageSize: Roll58x150
+*PageSize Roll58x75/58 mm x 75 mm receipt: "<</PageSize[164 213]/ImagingBBox null>>setpagedevice"
+*PageSize Roll58x100/58 mm x 100 mm receipt: "<</PageSize[164 283]/ImagingBBox null>>setpagedevice"
+*PageSize Roll58x150/58 mm x 150 mm receipt: "<</PageSize[164 425]/ImagingBBox null>>setpagedevice"
+*PageSize Roll58x200/58 mm x 200 mm receipt: "<</PageSize[164 567]/ImagingBBox null>>setpagedevice"
+*PageSize Roll58x297/58 mm x 297 mm long receipt: "<</PageSize[164 842]/ImagingBBox null>>setpagedevice"
+*PageSize Roll58x500/58 mm x 500 mm long receipt: "<</PageSize[164 1417]/ImagingBBox null>>setpagedevice"
+*CloseUI: *PageSize
+
+*OpenUI *PageRegion/Page Region: PickOne
+*OrderDependency: 100 AnySetup *PageRegion
+*DefaultPageRegion: Roll58x150
+*PageRegion Roll58x75/58 mm x 75 mm receipt: "<</PageSize[164 213]/ImagingBBox null>>setpagedevice"
+*PageRegion Roll58x100/58 mm x 100 mm receipt: "<</PageSize[164 283]/ImagingBBox null>>setpagedevice"
+*PageRegion Roll58x150/58 mm x 150 mm receipt: "<</PageSize[164 425]/ImagingBBox null>>setpagedevice"
+*PageRegion Roll58x200/58 mm x 200 mm receipt: "<</PageSize[164 567]/ImagingBBox null>>setpagedevice"
+*PageRegion Roll58x297/58 mm x 297 mm long receipt: "<</PageSize[164 842]/ImagingBBox null>>setpagedevice"
+*PageRegion Roll58x500/58 mm x 500 mm long receipt: "<</PageSize[164 1417]/ImagingBBox null>>setpagedevice"
+*CloseUI: *PageRegion
+
+*DefaultImageableArea: Roll58x150
+*ImageableArea Roll58x75/58 mm x 75 mm receipt: "0 0 164 213"
+*ImageableArea Roll58x100/58 mm x 100 mm receipt: "0 0 164 283"
+*ImageableArea Roll58x150/58 mm x 150 mm receipt: "0 0 164 425"
+*ImageableArea Roll58x200/58 mm x 200 mm receipt: "0 0 164 567"
+*ImageableArea Roll58x297/58 mm x 297 mm long receipt: "0 0 164 842"
+*ImageableArea Roll58x500/58 mm x 500 mm long receipt: "0 0 164 1417"
+
+*DefaultPaperDimension: Roll58x150
+*PaperDimension Roll58x75/58 mm x 75 mm receipt: "164 213"
+*PaperDimension Roll58x100/58 mm x 100 mm receipt: "164 283"
+*PaperDimension Roll58x150/58 mm x 150 mm receipt: "164 425"
+*PaperDimension Roll58x200/58 mm x 200 mm receipt: "164 567"
+*PaperDimension Roll58x297/58 mm x 297 mm long receipt: "164 842"
+*PaperDimension Roll58x500/58 mm x 500 mm long receipt: "164 1417"
+
+*OpenUI *Darkness/Print Darkness: PickOne
+*OrderDependency: 110 AnySetup *Darkness
+*DefaultDarkness: D9500
+*Darkness D7500/Light: ""
+*Darkness D9500/Normal: ""
+*Darkness D11000/Dark: ""
+*Darkness D13000/Very dark: ""
+*CloseUI: *Darkness
+
+*OpenUI *Speed/Print Speed: PickOne
+*OrderDependency: 110 AnySetup *Speed
+*DefaultSpeed: S10
+*Speed S6/Slow: ""
+*Speed S10/Normal: ""
+*Speed S14/Fast: ""
+*CloseUI: *Speed
+
+*OpenUI *Threshold/Image Threshold: PickOne
+*OrderDependency: 110 AnySetup *Threshold
+*DefaultThreshold: T180
+*Threshold T140/Lighter image: ""
+*Threshold T180/Normal: ""
+*Threshold T220/Darker image: ""
+*CloseUI: *Threshold
+
+*OpenUI *FontSize/Text Font Size: PickOne
+*OrderDependency: 110 AnySetup *FontSize
+*DefaultFontSize: F32
+*FontSize F24/Small: ""
+*FontSize F32/Normal: ""
+*FontSize F42/Large: ""
+*CloseUI: *FontSize
+
+*OpenUI *FeedLines/Paper Feed After Job: PickOne
+*OrderDependency: 110 AnySetup *FeedLines
+*DefaultFeedLines: L80
+*FeedLines L40/Short: ""
+*FeedLines L80/Normal: ""
+*FeedLines L120/Long: ""
+*CloseUI: *FeedLines
+
+*CloseGroup: General
+*DefaultResolution: 203dpi
+*Resolution 203dpi/203 DPI: ""
+*DefaultFont: Courier
+*Font Courier: Standard "(001.004)" Standard ROM
+*% End of x6h-rfcomm.ppd

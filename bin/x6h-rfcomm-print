@@ -93,6 +93,13 @@ def parse_bool(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def parse_int_choice(value: str) -> int:
+    match = re.search(r"\d+", value)
+    if not match:
+        raise ValueError(f"expected a numeric option value, got {value!r}")
+    return int(match.group(0))
+
+
 def parse_device_uri(uri: str, settings: Settings) -> Settings:
     if not uri:
         return settings
@@ -119,19 +126,19 @@ def apply_option(settings: Settings, key: str, value: str) -> Settings:
     if normalized in {"addr", "address"}:
         return replace(settings, addr=value.replace("-", ":").upper())
     if normalized == "channel":
-        return replace(settings, channel=int(value))
+        return replace(settings, channel=parse_int_choice(value))
     if normalized in {"darkness", "energy"}:
-        return replace(settings, darkness=int(value))
+        return replace(settings, darkness=parse_int_choice(value))
     if normalized == "speed":
-        return replace(settings, speed=int(value))
+        return replace(settings, speed=parse_int_choice(value))
     if normalized == "quality":
-        return replace(settings, quality=int(value))
+        return replace(settings, quality=parse_int_choice(value))
     if normalized == "threshold":
-        return replace(settings, threshold=int(value))
+        return replace(settings, threshold=parse_int_choice(value))
     if normalized in {"font-size", "fontsize"}:
-        return replace(settings, font_size=int(value))
-    if normalized in {"feed-lines", "feed"}:
-        return replace(settings, feed_lines=int(value))
+        return replace(settings, font_size=parse_int_choice(value))
+    if normalized in {"feed-lines", "feedlines", "feed"}:
+        return replace(settings, feed_lines=parse_int_choice(value))
     if normalized == "align" and value in {"left", "center", "right"}:
         return replace(settings, align=value)
     if normalized == "scale" and value in {"fit-width", "native"}:
